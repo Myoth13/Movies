@@ -1,6 +1,6 @@
 ---
-title: "OLS - Modeling and prediction for movies"
-subtitle: "Linear Regression and Modeling"
+title: "Modeling and prediction for movies"
+subtitle: "ML - Regression"
 author: "Anna Loznevaia"
 date: "`r Sys.Date()`"
 output: 
@@ -27,6 +27,7 @@ knitr::opts_chunk$set(rows.print=25)
 
 ```{r load-packages, message = FALSE}
 library(ggplot2)
+library(ggpubr)
 library(dplyr)
 library(statsr)
 library(GGally)
@@ -71,7 +72,7 @@ movies_test <- movies[-picked,]
 
 -   **Generalizability** - random sample was taken and number of observations are large, but here are considerations for generalizability:
 
-    -   looks like the ratings are relevant to the USA ( and probably Canada) population only - to be sure, I needs to check the audience of IMDb and Rotten Tomatoes web services.
+    -   looks like the ratings are relevant to the USA ( and probably Canada) population only - to be sure need to check the audience of IMDb and Rotten Tomatoes web services.
 
     -   only three movie types - Documentary, Feature Film, TV Movie are featured
 
@@ -329,13 +330,18 @@ We can see that some genres are underrepresented which could be a **source of a 
 
 movies %>% 
   ggplot() +
-    aes(y = reorder(genre, fin_score, FUN = median), x = fin_score) +
+    aes(x = reorder(genre, fin_score, FUN = median), y = fin_score) +
     theme_light() +
     theme(axis.title.y=element_blank()) +
-    geom_boxplot()
+    stat_compare_means(size=4, label.x = 11, label.y = -3 ) +
+    stat_mean(aes(color=genre)) + 
+    stat_conf_ellipse (aes(color=genre)) +
+    geom_boxplot(alpha=0) + 
+    coord_flip() +
+    theme(legend.position = "none")
 ```
 
-We can see that the median `fin_score` is different among genres - from lowest at Horror and Comedy to highest at Documentary.
+We can see that the median `fin_score` is different among genres and some differences in the means are significantly.
 
 `genre` vs `critics_score`
 
@@ -343,10 +349,15 @@ We can see that the median `fin_score` is different among genres - from lowest a
 
 movies %>% 
   ggplot() +
-    aes(y = reorder(genre, critics_score, FUN = median), x = critics_score) +
+    aes(x = reorder(genre, critics_score, FUN = median), y = critics_score) +
     theme_light() +
     theme(axis.title.y=element_blank()) +
-    geom_boxplot(alpha=0)
+    stat_compare_means(size=4, label.x = 11, label.y = -1 ) +
+    stat_mean(aes(color=genre)) + 
+    stat_conf_ellipse (aes(color=genre)) +
+    geom_boxplot(alpha=0) + 
+    coord_flip() +
+    theme(legend.position = "none")
 ```
 
 We can see that critics and general audience differs in magnitude and ranking
@@ -385,13 +396,18 @@ We can see that only two movies with "NC-17" rating are represented in the sampl
 
 movies %>% 
   ggplot() +
-    aes(y = reorder(mpaa_rating, fin_score, FUN = median), x = fin_score) +
+    aes(x = reorder(mpaa_rating, fin_score, FUN = median), y = fin_score) +
     theme_light() +
     theme(axis.title.y=element_blank()) +
-    geom_boxplot()
+    stat_compare_means(size=4, label.x = 6, label.y = -2.5) +  #,  ) +
+    stat_mean(aes(color=mpaa_rating)) + 
+    stat_conf_ellipse (aes(color=mpaa_rating)) +
+    geom_boxplot(alpha=0) + 
+    coord_flip() +
+    theme(legend.position = "none")
 ```
 
-We can see a substantial difference in the medians among ratings
+We can see a substantial difference in the some means and medians among ratings
 
 #### Release dates
 
@@ -411,7 +427,7 @@ We can see a weak negative correlation between year and scores
 ggpairs(movies,columns = c("fin_score","critics_score","thtr_rel_month","dvd_rel_month"))
 ```
 
-We can see that distribution of month is pretty fair and there are some difference in the medians of the scores
+We can see that distribution of months is pretty fair and there are some difference in the medians of the scores
 
 #### `imdb_num_votes`
 
@@ -554,7 +570,7 @@ summary(model.full)
 
 #### Backward selection
 
-I've chosen R^2^ based selection for maximizing predicting power (from two options available - R^2^ based and $p$ based). So explanatory ability in this context will suffer.
+I've chosen R^2^ based selection for maximizing predicting power from two options available - R^2^ based and $p$ based (course limitation). So explanatory ability in this context will suffer.
 
 Based on the full model adjusted R^2^ = 0.4606, I eliminated one predictor at a time
 
@@ -591,7 +607,7 @@ In the first round variable `thtr_rel_month` will be removed - 0.463912
 
 5th round `dvd_rel_year` - 0.4664639
 
-Final model with adjusted R^2^ 0.4665
+Final model with adjusted R^2^ - 0.4665
 
 #### Diagnostic of the model
 
@@ -616,11 +632,11 @@ par(mfrow = c(2,2))
 plot(model.hm)
 ```
 
-Residual plots look OK - fit is not perfect, but good enough, reasonably homoskedastic and some influential points.
+Residual plots look OK - fit is not perfect, but good enough, reasonably homoskedastic with some influential points.
 
 #### ML - Exhaustive search
 
-Let's use some silicon power =) There is not enough data and computational power to include interaction terms here, but let's compare with manual model selection without interacting terms.
+Let's use some silicon power =) There is not enough data and computational power to include interaction terms here, but let's compare with the manual model without interacting terms.
 
 ```{r fin_score_mod_ML, fig.height=3}
 
@@ -641,7 +657,7 @@ This plot shows the best model (max adjusted R squared) which was found by the a
 (res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))))
 ```
 
-I will save this model.
+I will save this model as:
 
 ```{r model.leaps}
 
@@ -670,6 +686,7 @@ We can see that this model has lower adjusted $R^2$ than the handmade model and 
 
 leaps_cr <- regsubsets(critics_score ~. , data=movies_short, nbest = 1, nvmax=30,
                        method = "exhaustive", force.out = c("fin_score"))
+
 sum_cr = summary(leaps_cr)
 
 plot(sum_cr$adjr2,type="l",xlab = "Number of parameters", ylab = "Adjusted R^2")
@@ -683,7 +700,7 @@ Coefficients for this model
 (res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))))
 ```
 
-We can see that the model is slightly different.
+We can see that the model is slightly different. I will save this model as:
 
 ```{r model_critics_score}
 
@@ -736,7 +753,7 @@ Coefficients for this model
 (res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])))
 ```
 
-Because search is not exhaustive it brings back different results each time. I will save one of the models.
+Because search is not exhaustive it brings back different results each time. I will save one of the models:
 
 ```{r caret_model}
 
@@ -757,6 +774,8 @@ model.caret <- lm(fin_score ~
 
 summary(model.caret)$adj.r.squared
 ```
+
+#### Advanced model diagnostics
 
 ##### OLS assumptions
 
@@ -884,7 +903,99 @@ dwtest(model.hm)
 
 Everything looks fine - big p-value, so we fail to reject $H_0$ - true autocorrelation is 0
 
-------------------------------------------------------------------------
+### Elastic net regularization
+
+One of the method of model selection is regularization. It is a great tool to deal with overfitting. I will check if it yield interesting result in my case to help with collinearities and influential points.
+
+```{r elastic-reg}
+movies_glmnet <- movies_short %>% 
+  dplyr::select(-fin_score,-critics_score)
+
+movies_test_glmnet <- movies_test %>% 
+  dplyr::select( 
+    title_type,
+    genre,
+    runtime ,
+    mpaa_rating ,
+    thtr_rel_year ,
+    thtr_rel_month,
+    dvd_rel_year, 
+    dvd_rel_month,
+    imdb_num_votes ,
+    best_pic_nom ,
+    best_pic_win , 
+    best_ac_win , 
+    best_dir_win, 
+    top200_box 
+  ) 
+
+library(glmnet)
+
+results <- data.frame()
+
+for (i in 0:10) {
+
+   fit.name <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet), 
+              type.measure="mse", alpha=i/10, family="gaussian")
+  
+  pred <- predict(fit.name, s=fit.name$lambda.min, newx=data.matrix(movies_test_glmnet))
+  
+  ## Metrics
+  mse <- mean((movies_test$fin_score - pred)^2,na.rm=T)
+  efR <- 1 - sum( (movies_test$fin_score - pred)^2 ,na.rm=T)/
+    sum( (movies_test$fin_score-mean(movies_test$fin_score,na.rm=T))^2 ,na.rm=T)
+  
+  ## Store the results
+  results <- rbind(results, data.frame(alpha=i/10, mse=mse, efR = efR))
+  
+}
+
+results
+
+```
+
+We can see that results are not very impressive. Below are the coefficients of the best model
+
+```{r elastic_coefs}
+
+model.net <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet), type.measure="mse", alpha=0.2, 
+      family="gaussian")
+
+tmp_coeffs <- coef(model.net,s = "lambda.min", exact=T)
+data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x)
+```
+
+Unfortunately I could not find how to extract separate levels for each of the factors.
+
+### Robust regression
+
+As another method of dealing with influential points I will try robust regression.
+
+```{r robust_reg}
+
+library(robustbase)
+
+model.robust = lmrob(fin_score ~ 
+                  title_type +
+                  genre +
+                  runtime +
+                  mpaa_rating +
+                  thtr_rel_year +
+                  #thtr_rel_month +
+                  #####dvd_rel_year + 
+                  dvd_rel_month + 
+                  imdb_num_votes +
+                  best_pic_nom +
+                  ####best_pic_win +
+                  best_ac_win , 
+                  ###best_dir_win,  
+                  ##top200_box, 
+                data = movies_short)
+
+summary(model.robust)
+```
+
+Some promising results with adjusted R^2^ 0.5088. I will compare testing results with the rest of the models
 
 ## Part 5: Prediction
 
@@ -929,13 +1040,14 @@ $$
 calc_metrics <- function(model.name,newdata,response.var) {
   argg <- as.list(environment())
   pred <- predict(model.name,newdata = newdata)
+  #pred <- predict(model.name,newx = newdata)
   act_pred <- data.frame(cbind(act=response.var, pred=pred))
     
   MSE <- mean((act_pred$act - act_pred$pred)^2,na.rm=T)
   efR <- 1 - sum( (act_pred$act - act_pred$pred)^2 ,na.rm=T)/
     sum( (act_pred$act-mean(act_pred$act,na.rm=T))^2 ,na.rm=T)
   
-  df <- data.frame(deparse(substitute(model.name)),MSE,round(efR,3))
+  df <- data.frame(deparse(substitute(model.name)),round(MSE,4),round(efR,4))
   names(df) <- c("Model","MSE","Efron'sR^2")
   return(df)
 }
@@ -945,8 +1057,8 @@ res_table <- calc_metrics(model.full,movies_test,movies_test$fin_score)
 res_table <- rbind(res_table,calc_metrics(model.hm,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.leaps,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.caret,movies_test,movies_test$fin_score))
+res_table <- rbind(res_table,calc_metrics(model.robust,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.crit,movies_test,movies_test$critics_score))
-
 res_table
 ```
 
@@ -965,6 +1077,6 @@ We can see that type, genre and mpaa rating of a movie have substantial influenc
 
 2\) Quality of the model.
 
-There is not enough information in the dataset - many predictor levels have too small numbers of observations.
+Firstly - there is not enough information in the dataset - many predictor's levels have too small numbers of observations. The best possible solution is to increase a sample size. Also methods like <https://www.researchgate.net/publication/257364616_SMOTE_for_Regression> can be useful if collecting more data is not an option.
 
-There are too many influential points - I think that OLS is not the perfect option for this dataset. I would like to try something more robust (Robust regression - M-Estimator for example) or deal with collinearities.
+There are a couple of other problems: influential points and collinearity. I would like to try some ensemble methods later.
