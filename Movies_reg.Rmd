@@ -1,0 +1,970 @@
+---
+title: "OLS - Modeling and prediction for movies"
+subtitle: "Linear Regression and Modeling"
+author: "Anna Loznevaia"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 6
+---
+
+```{r}
+
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+knitr::opts_chunk$set(rows.print=25)
+```
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(GGally)
+library(cowplot)
+library(lmtest)
+library(leaps)
+library(caret)
+library(car)
+library(olsrr)
+library(tseries)
+library(effectsize)
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+
+#month as factors
+movies <- movies %>% 
+  mutate(
+    thtr_rel_month=as.factor(thtr_rel_month),
+    dvd_rel_month=as.factor(dvd_rel_month))
+
+#strip some data for prediction
+train_size <- floor(0.90*nrow(movies))
+set.seed(666)
+
+# randomly split data
+picked <- sample(seq_len(nrow(movies)),size = train_size)
+movies <- movies[picked,]
+movies_test <- movies[-picked,]
+```
+
+------------------------------------------------------------------------
+
+## Part 1: Data
+
+-   **Independence** - The data set is 651 randomly sampled movies produced and released before 2016. I have a concern about dependence of critics and general public ratings on published earlier reviews and ratings. I would argue that they are not independent and may be not suitable for modeling by OLS and at least it is a substantial source of a bias.
+
+-   **Type** **of research** - observational study - only correlations can be established
+
+-   **Generalizability** - random sample was taken and number of observations are large, but here are considerations for generalizability:
+
+    -   looks like the ratings are relevant to the USA ( and probably Canada) population only - to be sure, I needs to check the audience of IMDb and Rotten Tomatoes web services.
+
+    -   only three movie types - Documentary, Feature Film, TV Movie are featured
+
+    -   released from 1970 to 2016
+
+    -   rating NC-17 not included
+
+    -   bias source related to how scores are calculated (see below in research question)
+
+------------------------------------------------------------------------
+
+## Part 2: Research question
+
+### Popularity of the movie
+
+I will build a model to predict the popularity of the movie among general audience and critics using OLS (ordinary least square regression) on the given dataset, as well as research on each predicted variable independently during EDA (if something interesting there to be found).
+
+In [Part 4: Modeling] I will build a few models:
+
+-   model for the `fin_score` using manual backward selection with adjusted R^2^, as a criterion for the best model;
+
+-   model for the `fin_score` using exhaustive search using `leaps` library with the same metric (adj R^2^);
+
+-   model for the `fin_score` using cross-validation model selection technique from library `caret`, which uses the smallest prediction error as a criterion for the best model.
+
+-   model for the `critics_score` to compare it with the general public score models.
+
+#### Response variables
+
+-   `critics_score`: Critics score on Rotten Tomatoes
+
+-   `audience_score`: Audience score on Rotten Tomatoes
+
+-   `imdb_rating`: Rating on IMDB
+
+-   `imdb_num_votes`: Number of votes on IMDB, will be used to weight `imdb_rating`
+
+from <https://www.makeuseof.com/tag/best-movie-ratings-sites/>
+
+> The biggest issue with Rotten Tomatoes is that it breaks down complex opinions into a **Yes** or **No** score. It scores a critic who thought the movie was decent but had some flaws (say, a 59 percent rating) the same as one who thought the movie was absolute garbage (a zero percent score).
+>
+> You'll notice this with the **Average Rating** under the score. Take Jumanji: Welcome to the Jungle as an example. Of the 232 critic reviews, 177 of them are positive. This gives the movie a score of 76 percent. However, the critics rated the movie an average of 6.2/10---quite a bit under the 76 percent displayed on the page.
+
+So it raises a concern about bias in the `audience_score` and if it is pertinent to combine it with the `imdb_rating` for the final audience score. And they both will suffer from the response bias - it is more likely to leave a review if you have a really strong opinion on the subject - either positive or negative. Moreover after 2018 Rotten Tomatoes implemented a new user filtering system based on purchased tickets from a particular provider, which renders another layer of bias on top of it (not applicable for this dataset though, but it makes the model not useful for fresh data).
+
+#### Candidates for regressors
+
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Variable           | Description                                                                                                                                                                                          |
++====================+======================================================================================================================================================================================================+
+| `title_type`       | Type of movie (Documentary, Feature Film, TV Movie)                                                                                                                                                  |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `genre`            | Genre of movie                                                                                                                                                                                       |
+|                    |                                                                                                                                                                                                      |
+|                    | "Action & Adventure", "Animation" , "Art House & International", "Comedy", "Documentary", "Drama", "Horror", "Musical & Performing Arts", "Mystery & Suspense", "Other", "Science Fiction & Fantasy" |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `runtime`          | Runtime of movie (in minutes)                                                                                                                                                                        |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `mpaa_rating`      | MPAA rating of the movie (G, PG, PG-13, R, Unrated)                                                                                                                                                  |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `thtr_rel_year`    | Year the movie is released in theaters                                                                                                                                                               |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `thtr_rel_month`   | Month the movie is released in theaters                                                                                                                                                              |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `dvd_rel_year`     | Year the movie is released on DVD                                                                                                                                                                    |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `dvd_rel_month`    | Month the movie is released on DVD                                                                                                                                                                   |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `imdb_num_votes`   | Number of votes on IMDB                                                                                                                                                                              |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `best_pic_nom`     | Whether or not the movie was nominated for a best picture Oscar (no, yes)                                                                                                                            |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `best_pic_win`     | Whether or not the movie won a best picture Oscar (no, yes)                                                                                                                                          |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `best_actor_win`   | Whether or not one of the main actors in the movie ever won an Oscar (no, yes) -- note that this is not necessarily whether the actor won an Oscar for their role in the given movie                 |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `best_actress_win` | Whether or not one of the main actresses in the movie ever won an Oscar (no, yes) -- not that this is not necessarily whether the actresses won an Oscar for their role in the given movie           |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `best_dir_win`     | Whether or not the director of the movie ever won an Oscar (no, yes) -- not that this is not necessarily whether the director won an Oscar for the given movie                                       |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| `top200_box`       | Whether or not the movie is in the Top 200 Box Office list on BoxOfficeMojo (no, yes)                                                                                                                |
++--------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+Variables excluded from the potential regressors:
+
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| Variable          | Description                                                                                 | Reason                                       |
++===================+=============================================================================================+==============================================+
+| `thtr_rel_day`    | Day of the month the movie is released in theaters                                          | Not enough observations                      |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `dvd_rel_day`     | Day of the month the movie is released on DVD                                               | Not enough observations                      |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `critics_rating`  | Categorical variable for critics rating on Rotten Tomatoes (Certified Fresh, Fresh, Rotten) | Collinear with `critics_score` (derivative)  |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `audience_rating` | Categorical variable for audience rating on Rotten Tomatoes (Spilled, Upright)              | Collinear with `audience_score (derivative)` |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `director`        | Director of the movie                                                                       | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `actor1`          | First main actor/actress in the abridged cast of the movie                                  | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `actor2`          | Second main actor/actress in the abridged cast of the movie                                 | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `actor3`          | Third main actor/actress in the abridged cast of the movie                                  | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `actor4`          | Fourth main actor/actress in the abridged cast of the movie                                 | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `actor5`          | Fifth main actor/actress in the abridged cast of the movie                                  | Not enough data for this type of analysis    |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `imdb_url`        | Link to IMDB page for the movie                                                             | Irrelevant information                       |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+| `rt_url`          | Link to Rotten Tomatoes page for the movie                                                  | Irrelevant information                       |
++-------------------+---------------------------------------------------------------------------------------------+----------------------------------------------+
+
+: Excluded variables
+
+Each variable will be explored separately in EDA and decisions will be made accordingly.
+
+------------------------------------------------------------------------
+
+## Part 3: Exploratory data analysis
+
+### Response variables
+
+```{r all_scores_pairs}
+
+ggpairs(movies,columns = c("critics_score","audience_score","imdb_rating"))
+```
+
+`critics_score` **-** we can see the critic's tendency to score lower than the general audience.
+
+`audience_score` has a quite high correlation with `imdb_rating`
+
+#### IMDB scores weighting
+
+`Imdb_num_votes`
+
+Small amount of voters could be important source of a bias
+
+```{r imdb_num_votes_sum}
+summary(movies$imdb_num_votes)
+```
+
+We can see that the range is very wide. Seems quite legitimate to weight scores with a very low number of voters according to the amount of information it contains.
+
+Score for IMDb will be weighted according to formula
+
+$$
+W=\dfrac{R*v + C*m}{v+m}
+$$
+
+Where
+
+$W$ = weighted rating
+
+$R$ = average for the movie as a number from 1 to 10 (mean) = (Rating)
+
+$v$ = number of votes for the movie = (votes)
+
+$m$ = minimum votes required to be considered significant - I've chosen 1st percentile (best guess for now)
+
+$C$ = the mean vote across the whole report (sample mean 6.49)
+
+Graphic of adjusted weights `imdb_rating_W` vs `imdb_rating`
+
+```{r imdb_rating_w}
+
+m <- quantile(movies$imdb_num_votes, probs = 0.01)
+
+movies <- movies %>% 
+  mutate(imdb_rating_W = (imdb_rating*imdb_num_votes + mean(imdb_rating)*m[[1]]) /
+           (imdb_num_votes+m[[1]]) )
+
+movies_test <- movies_test %>% 
+  mutate(imdb_rating_W = (imdb_rating*imdb_num_votes + mean(imdb_rating)*m[[1]]) /
+           (imdb_num_votes+m[[1]]) )
+
+movies %>% 
+  ggplot()+
+    aes(x=imdb_rating, y=imdb_rating_W) +
+    labs(x="Original rating",y="Scaled rating") +
+    geom_hline(yintercept = mean(movies$imdb_rating), color="blue") +
+    geom_point()
+```
+
+We can see that points with the lower number of voters moved towards the average proportionally to the information contained in it (`Imdb_num_votes`).
+
+#### Final audience score
+
+Final score will be normalized combination of `audience_score` and `imdb_rating`
+
+```{r fin_score_dens, fig.height=3}
+
+movies <- movies %>% 
+  mutate(fin_score = (scale(audience_score)[,1] + scale(imdb_rating_W)[,1])/2) 
+
+movies_test <- movies_test %>% 
+  mutate(fin_score = (scale(audience_score)[,1] + scale(imdb_rating_W)[,1])/2) 
+
+plot(density(movies$fin_score,na.rm=TRUE))
+```
+
+Distribution of the final score is more symmetric than original scores.
+
+#### Critics score
+
+Normalizing for consistency
+
+```{r critics_score_norm}
+
+movies <- movies %>% 
+  mutate(critics_score = (scale(critics_score)[,1])) 
+
+movies_test <- movies_test %>% 
+  mutate(critics_score = (scale(critics_score)[,1])) 
+
+```
+
+### Regressors
+
+#### `title_type`
+
+```{r title_type_count}
+
+movies %>% 
+  count(title_type)
+```
+
+We can see that "TV Movie" type is underrepresented which could be a **source of a bias**
+
+`fin_score` vs `title_type`
+
+```{r title_type_fin_score}
+
+ggpairs(movies,columns = c("critics_score","fin_score","title_type"))
+```
+
+#### `genre`
+
+Distribution
+
+```{r genre_dist}
+
+movies %>% 
+  ggplot(aes(x=forcats::fct_infreq(genre),fill = genre)) +
+    geom_bar(show.legend=FALSE) +
+    coord_flip()
+
+```
+
+We can see that some genres are underrepresented which could be a **source of a bias**
+
+`genre` vs `fin_score`
+
+```{r genre_fin_score}
+
+movies %>% 
+  ggplot() +
+    aes(y = reorder(genre, fin_score, FUN = median), x = fin_score) +
+    theme_light() +
+    theme(axis.title.y=element_blank()) +
+    geom_boxplot()
+```
+
+We can see that the median `fin_score` is different among genres - from lowest at Horror and Comedy to highest at Documentary.
+
+`genre` vs `critics_score`
+
+```{r genre_critic_score}
+
+movies %>% 
+  ggplot() +
+    aes(y = reorder(genre, critics_score, FUN = median), x = critics_score) +
+    theme_light() +
+    theme(axis.title.y=element_blank()) +
+    geom_boxplot(alpha=0)
+```
+
+We can see that critics and general audience differs in magnitude and ranking
+
+#### `runtime`
+
+`runtime` vs `fin_score`
+
+```{r runtime_fin_score}
+
+ggpairs(movies,columns = c("critics_score","fin_score","runtime"))
+```
+
+Distribution of `runtime` is right-skewed with some outliers. There is a heteroscedasticity, I will apply log-modification in the model.
+
+#### `mpaa_rating`
+
+Distribution
+
+```{r mpaa_rating, fig.height=3}
+
+movies %>% 
+  ggplot() +
+    aes(x=forcats::fct_infreq(mpaa_rating),fill = mpaa_rating)+
+    geom_bar(show.legend=FALSE) +
+    theme(axis.title.y=element_blank()) +
+    coord_flip()
+
+```
+
+We can see that only two movies with "NC-17" rating are represented in the sample, which could be a **source of a bias**
+
+`mpaa_rating` vs `fin_score`
+
+```{r mpaa_rating_fin_score, fig.height=3}
+
+movies %>% 
+  ggplot() +
+    aes(y = reorder(mpaa_rating, fin_score, FUN = median), x = fin_score) +
+    theme_light() +
+    theme(axis.title.y=element_blank()) +
+    geom_boxplot()
+```
+
+We can see a substantial difference in the medians among ratings
+
+#### Release dates
+
+`thtr_rel_year` vs `dvd_rel_year` vs `fin_score` vs`critics_score`
+
+```{r thtr_year_fin_score}
+
+ggpairs(movies,columns = c("fin_score","critics_score","thtr_rel_year","dvd_rel_year"))
+```
+
+We can see a weak negative correlation between year and scores
+
+`thtr_rel_month` vs `dvd_rel_month` vs `fin_score` vs`critics_score`
+
+```{r thtr_month_fin_score}
+
+ggpairs(movies,columns = c("fin_score","critics_score","thtr_rel_month","dvd_rel_month"))
+```
+
+We can see that distribution of month is pretty fair and there are some difference in the medians of the scores
+
+#### `imdb_num_votes`
+
+`imdb_num_votes` vs `fin_score`
+
+```{r imdb_num_fin_score}
+
+ggpairs(movies,columns = c("imdb_num_votes","fin_score","critics_score"))
+```
+
+Distribution of `imdb_num_votes` is heavily right-skewed with some outliers.
+
+Heteroscedasticity, will apply log-transformation in the model
+
+#### `best_pic_nom` and `best_pic_win`
+
+`best_pic_nom` vs `fin_score`
+
+```{r best_pic_nom_fin_score}
+
+ggpairs(movies, columns = c("fin_score","critics_score","best_pic_nom"))
+    
+```
+
+We can see that the medians differ substantially, but the number of nominated movies is small.
+
+```{r best_pic_win_sum}
+
+movies %>% 
+  count(best_pic_win)
+```
+
+`best_pic_win` summary shows that there are too small amount of information available (it is duplicated with `best_pic_nom` anyway)
+
+#### `best_actor_win` and `best_actress_win`
+
+I will create a new indicator variable which include if any one of them win
+
+```{r best_actor}
+
+movies <- movies %>% 
+  mutate(
+    best_ac_win = if_else(best_actor_win=="yes" | best_actress_win=="yes","yes","no"))
+
+movies_test <- movies_test %>% 
+  mutate(
+    best_ac_win = if_else(best_actor_win=="yes" | best_actress_win=="yes","yes","no"))
+```
+
+`best_actor` vs `fin_score`
+
+```{r best_actor_fin_score}
+
+ggpairs(movies, columns = c("fin_score","critics_score", "best_ac_win")) 
+```
+
+I do not see any substantial difference in the medians here.
+
+#### `best_dir_win`
+
+`best_dir_win` vs `fin_score`
+
+```{r best_dir_fin_score}
+
+ggpairs(movies, columns = c("fin_score","critics_score", "best_dir_win")) 
+```
+
+We can see a difference in the means, but there are a small number of counts in the "Yes" category.
+
+#### `top200_box`
+
+`top200_box` vs `fin_score`
+
+```{r top200_fin_score}
+
+ggpairs(movies, columns = c("fin_score","critics_score", "top200_box"))
+```
+
+We can see a difference in the medians, but there are too small counts in the "Yes" category.
+
+#### `movies_short`
+
+I will create a short version of the dataset containing only usable variables with all transformations.
+
+```{r movies_short}
+
+movies_short <- movies %>% 
+  select (
+    fin_score,
+    critics_score,
+    title_type,
+    genre,
+    runtime ,
+    mpaa_rating ,
+    thtr_rel_year ,
+    thtr_rel_month,
+    dvd_rel_year, 
+    dvd_rel_month,
+    imdb_num_votes ,
+    best_pic_nom ,
+    best_pic_win , 
+    best_ac_win , 
+    best_dir_win, 
+    top200_box ) %>% 
+  mutate(runtime = log(runtime), imdb_num_votes = log(imdb_num_votes))
+
+movies_test <- movies_test %>% 
+  mutate(runtime = log(runtime), imdb_num_votes = log(imdb_num_votes))
+
+```
+
+------------------------------------------------------------------------
+
+## Part 4: Modeling
+
+#### Full model
+
+```{r full_model_sum}
+
+model.full <- lm(fin_score ~ 
+                  title_type +
+                  genre +
+                  runtime +
+                  mpaa_rating +
+                  thtr_rel_year +
+                  thtr_rel_month +
+                  dvd_rel_year +
+                  dvd_rel_month +
+                  imdb_num_votes +
+                  best_pic_nom +
+                  best_pic_win +
+                  best_ac_win +
+                  best_dir_win +
+                  top200_box,
+                data = movies_short
+                )
+
+summary(model.full)
+```
+
+#### Backward selection
+
+I've chosen R^2^ based selection for maximizing predicting power (from two options available - R^2^ based and $p$ based). So explanatory ability in this context will suffer.
+
+Based on the full model adjusted R^2^ = 0.4606, I eliminated one predictor at a time
+
+```{r backw_select_fin}
+
+model.hm <- lm(fin_score ~ 
+                  title_type +
+                  genre +
+                  runtime +
+                  mpaa_rating +
+                  thtr_rel_year +
+                  #thtr_rel_month +
+                  #####dvd_rel_year + 
+                  dvd_rel_month + 
+                  imdb_num_votes +
+                  best_pic_nom +
+                  ####best_pic_win +
+                  best_ac_win , 
+                  ###best_dir_win,  
+                  ##top200_box, 
+                data = movies_short
+                )
+
+summary(model.hm)$adj.r.squared
+```
+
+In the first round variable `thtr_rel_month` will be removed - 0.463912
+
+2nd round `top200_box` - 0.4648519
+
+3rd round `best_dir_win` - 0.4656855
+
+4th round `best_pic_win` - 0.4662339
+
+5th round `dvd_rel_year` - 0.4664639
+
+Final model with adjusted R^2^ 0.4665
+
+#### Diagnostic of the model
+
+```{r fin_model_diagn}
+hist_pl_fin <- ggplot(data = model.hm, aes(x = .resid)) +
+  geom_histogram(binwidth = 0.1) +
+  xlab("Residuals")
+
+qq_pl_fin <- ggplot(data = model.hm, aes(sample = .resid)) +
+  stat_qq() + stat_qq_line()
+
+plot_grid(
+  hist_pl_fin, 
+  qq_pl_fin, 
+  labels = c('Distribution', 'QQ norm'), label_size = 12)
+```
+
+Distribution of residuals looks left - skewed without outliers.
+
+```{r fin_model_res_plots, fig.height=6}
+par(mfrow = c(2,2))
+plot(model.hm)
+```
+
+Residual plots look OK - fit is not perfect, but good enough, reasonably homoskedastic and some influential points.
+
+#### ML - Exhaustive search
+
+Let's use some silicon power =) There is not enough data and computational power to include interaction terms here, but let's compare with manual model selection without interacting terms.
+
+```{r fin_score_mod_ML, fig.height=3}
+
+leaps <- regsubsets(fin_score ~. , data=movies_short, nbest = 1, nvmax=30,  
+                    method = "exhaustive", force.out = c("critics_score"))
+
+#choosing best model based on adjr2 (all options are - rsq, cp, adjr2, bic, rss)
+sum = summary(leaps)
+
+plot(sum$adjr2,type="l",xlab = "Number of parameters", ylab = "Adjusted R^2")
+points(  which.max(sum$adjr2),sum$adjr2[which.max(sum$adjr2)],col="green")
+```
+
+This plot shows the best model (max adjusted R squared) which was found by the algorithm. Below are coefficients of this best model
+
+```{r ml_model_coef}
+
+(res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))))
+```
+
+I will save this model.
+
+```{r model.leaps}
+
+model.leaps <- lm(fin_score ~ 
+                    title_type +
+                    genre +
+                    runtime +
+                    mpaa_rating +
+                    thtr_rel_year +
+                    thtr_rel_month +
+                    dvd_rel_month +
+                    imdb_num_votes +
+                    best_pic_nom +
+                    best_ac_win ,   
+                data = movies_short
+                )
+
+summary(model.leaps)$adj.r.squared
+```
+
+We can see that this model has lower adjusted $R^2$ than the handmade model and different predictors.
+
+#### Model for the `critics_score`
+
+```{r critics_score_model, fig.height=3}
+
+leaps_cr <- regsubsets(critics_score ~. , data=movies_short, nbest = 1, nvmax=30,
+                       method = "exhaustive", force.out = c("fin_score"))
+sum_cr = summary(leaps_cr)
+
+plot(sum_cr$adjr2,type="l",xlab = "Number of parameters", ylab = "Adjusted R^2")
+points(which.max(sum_cr$adjr2),sum_cr$adjr2[which.max(sum_cr$adjr2)],col="green")
+```
+
+Coefficients for this model
+
+```{r model_critics_score_coef}
+
+(res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))))
+```
+
+We can see that the model is slightly different.
+
+```{r model_critics_score}
+
+model.crit = lm (critics_score ~
+                    title_type +
+                    genre +
+                    mpaa_rating +
+                    thtr_rel_year +
+                    thtr_rel_month +
+                    dvd_rel_year +
+                    dvd_rel_month +
+                    imdb_num_votes +
+                    best_pic_nom +
+                    best_dir_win ,
+                  data = movies_short
+                  )
+
+summary(model.crit)
+```
+
+Model for the `critics_score` has lower adjusted R^2^ than the similar ML model for the `fin_score` and different regressors.
+
+Critics rating is harder to explain and predict than general audience's
+
+#### Cross validation selection
+
+```{r cross_valid_learning, message=FALSE, warning=FALSE}
+
+# Set up repeated k-fold cross-validation
+train.control <- trainControl(method = "cv", number = 5)
+
+# Train the model
+step.model <- train(fin_score ~.,
+                    data = movies_short,
+                    method = "leapSeq",
+                    tuneGrid = data.frame(nvmax = 20:48),
+                    trControl = train.control,
+                    na.action = na.exclude,
+                    force.out = c("critics_score")
+                    )
+
+#Best number of parameters
+step.model$bestTune
+```
+
+Coefficients for this model
+
+```{r model_cross_coef}
+
+(res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])))
+```
+
+Because search is not exhaustive it brings back different results each time. I will save one of the models.
+
+```{r caret_model}
+
+model.caret <- lm(fin_score ~ 
+                    title_type +
+                    genre +
+                    runtime +
+                    mpaa_rating +
+                    thtr_rel_year +
+                    thtr_rel_month +
+                    dvd_rel_year +
+                    dvd_rel_month +
+                    imdb_num_votes +
+                    best_pic_nom +
+                    best_pic_win ,   
+                data = movies_short
+                )
+
+summary(model.caret)$adj.r.squared
+```
+
+##### OLS assumptions
+
+1.  $\epsilon$ is a random variable that does not depend on X - "perfect model"
+
+    We checked it earlier - residual plot shows no obvious patterns
+
+2.  $E(\epsilon)=0$ (always true for a model with an intercept)
+
+3.  All $\epsilon_i$ are independent of each other (they are uncorrelated for the population, but not for the sample)
+
+    [Residuals autocorrelation]
+
+4.  $\epsilon \sim N(0,\theta_\epsilon)$ Residuals and $y_i$ are normally distributed
+
+    We checked it earlier by QQ plot. They are not perfectly normal, but will do OK.
+
+5.  all $\epsilon_i$ have the same PDF - homoscedasticity
+
+    We checked it earlier by residual plot.
+
+##### Collinearity
+
+High collinearity of the predictor variables can lead to unstable coefficients and unreliable SE for these coefficients which make the model not suitable for explanation but can be perfectly fine for predicting purposes.
+
+variance inflation factors (Are any \> 5 or 10?)
+
+```{r collinear_clean}
+
+vif(model.hm) 
+```
+
+We can see that `genre` and `title_type` are under suspicion, but as the main purpose for the model is predicting power I will leave it as is.
+
+##### Influential points
+
+Quality of the model highly depends on the amount of influential points and ability of the model to deal with them.
+
+###### Studentized residuals
+
+Creating studentized (standardized) residuals to run tests.
+
+Internally studentized residuals - all data are included in the calculation
+
+$$
+isr_i=\dfrac{e_i}{SE(e_i)} = \dfrac{e_i}{s_e\sqrt{1-h_{ii}}}
+$$
+
+Externally studentized residuals - the $i_{th}$ data point is excluded from the calculation. T-distributed (if $\epsilon_i \sim N(0,\sigma_\epsilon) iid$ )
+
+$$
+esr_i=isr_i\sqrt{ \dfrac{n-p-1}{n-p-isr^2_i} }
+$$
+
+```{r full_model_esr}
+
+ma_stud = rstudent(model.hm)
+ols_plot_resid_stud(model.hm)
+```
+
+We can see some outliers
+
+###### Williams graph
+
+Slightly more convenient way to search for influential points than standard graph from model diagnostic plot "Residuals vs leverage"
+
+```{r full_model_williams}
+
+ols_plot_resid_lev(model.hm)
+```
+
+We can see a lot of outliers and leverage points, few of which are influential
+
+###### Cook's distance
+
+A data point having a large cook's d indicates that the data point strongly influences the fitted values.
+
+$$
+D_i = \dfrac{isr_i^2}{p}\dfrac{h_{ii}}{(1-h_{ii})}
+$$
+
+```{r full_model_cooks_graph}
+
+ols_plot_cooksd_chart(model.hm)
+```
+
+This graph shows that I have a lot of influential points above 0.00623053
+
+###### Difference in Beta
+
+DFBETA measures the difference in each parameter estimate with and without the influential point. There is a DFBETA for each data point i.e if there are n observations and k variables, there will be n∗k DFBETAs. In general, large values of DFBETAS indicate observations that are influential in estimating a given parameter. Belsley, Kuh, and Welsch recommend 2 as a general cutoff value to indicate influential observations and $\sqrt{4/n}$ as a size-adjusted cutoff.
+
+$$
+DFBETA_{k,i} = \dfrac{b_k - b_{k(i)}}{SE(b_{k(i)})}
+$$
+
+I'm not going to make plots, because will be too many, just point out amount of points above the limit:
+
+```{r full_model_dfbeta}
+
+length(abs(dfbeta(model.hm))[abs(dfbeta(model.hm))>sqrt(4/length(ma_stud))])
+```
+
+I've got a lot of suspicious points - not a perfect result. Most probably OLS is the not ideal tool to use with this dataset. I would definitely like to try out different tools.
+
+##### Residuals autocorrelation
+
+Checking for "omitted variables" which can leave traces in the residuals in the form of auto-correlation ( or inadvertent time series ).
+
+Lag plot
+
+```{r adv_model_autocor_lag plot}
+
+lag.plot(model.hm$residual, lags = 1, do.lines = F, labels = F)
+```
+
+Looks good - no visible correlation
+
+Durbin--Watson statistic
+
+```{r adv_model_}
+
+dwtest(model.hm)
+```
+
+Everything looks fine - big p-value, so we fail to reject $H_0$ - true autocorrelation is 0
+
+------------------------------------------------------------------------
+
+## Part 5: Prediction
+
+#### Handmade model
+
+Few points with their CI
+
+```{r predict_CI}
+
+head(predict(model.hm, movies_test, interval = "prediction", level = 0.95))
+```
+
+Lets' compare with their original scores
+
+```{r predict_compare}
+
+pred <- predict(model.hm, movies_test)
+head(cbind(actual=movies_test$fin_score, predicted=pred))
+```
+
+We can see that the uncertainty in the prediction values is very high.
+
+#### Comparing models
+
+At the beginning I split the original dataset in two - movies and movies_test. I used movies to train models. Now I will use the remain part to compare my models
+
+Some metrics which based on means of not squared parameters (Min-Max Accuracy and Mean Absolute Percentage Error (MAPE) for example) are stopped working after normalization of response variables
+
+I will calculate two metrics: MSE and Effron's R squared
+
+$$
+MSE = \dfrac{1}{n}\sum_{i=1}^N(y_i-\hat{y}_i)^2
+$$ $$
+R^2= 1-\dfrac{\sum_{i=1}^N(y_i-\hat{y}_i)^2}{\sum_{i=1}^N(y_i-\bar{y})^2}
+$$
+
+##### Metrics on the test data
+
+```{r model_compare}
+
+#function to calculate metrics
+calc_metrics <- function(model.name,newdata,response.var) {
+  argg <- as.list(environment())
+  pred <- predict(model.name,newdata = newdata)
+  act_pred <- data.frame(cbind(act=response.var, pred=pred))
+    
+  MSE <- mean((act_pred$act - act_pred$pred)^2,na.rm=T)
+  efR <- 1 - sum( (act_pred$act - act_pred$pred)^2 ,na.rm=T)/
+    sum( (act_pred$act-mean(act_pred$act,na.rm=T))^2 ,na.rm=T)
+  
+  df <- data.frame(deparse(substitute(model.name)),MSE,round(efR,3))
+  names(df) <- c("Model","MSE","Efron'sR^2")
+  return(df)
+}
+
+#metrics for all the models
+res_table <- calc_metrics(model.full,movies_test,movies_test$fin_score)
+res_table <- rbind(res_table,calc_metrics(model.hm,movies_test,movies_test$fin_score))
+res_table <- rbind(res_table,calc_metrics(model.leaps,movies_test,movies_test$fin_score))
+res_table <- rbind(res_table,calc_metrics(model.caret,movies_test,movies_test$fin_score))
+res_table <- rbind(res_table,calc_metrics(model.crit,movies_test,movies_test$critics_score))
+
+res_table
+```
+
+## Part 6: Conclusion
+
+1\) Model effect size
+
+Best model according to the test data is `model.caret` but we will look at the coefficients of the manually created model
+
+```{r best_model_effect}
+
+effectsize(model.hm)
+```
+
+We can see that type, genre and mpaa rating of a movie have substantial influence on its popularity. We can also see that older movies have a tendency to be rated higher by the audience. Month of a release has some influence too, but it is not a very strong effect size. And finally we can see that the number of voters and if a movie had been nominated are correlated with its popularity.
+
+2\) Quality of the model.
+
+There is not enough information in the dataset - many predictor levels have too small numbers of observations.
+
+There are too many influential points - I think that OLS is not the perfect option for this dataset. I would like to try something more robust (Robust regression - M-Estimator for example) or deal with collinearities.
