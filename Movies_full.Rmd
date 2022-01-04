@@ -39,7 +39,6 @@ library(car)
 library(olsrr)
 library(tseries)
 library(effectsize)
-library(pander)
 ```
 
 ### Load data
@@ -67,13 +66,13 @@ movies_test <- movies[-picked,]
 
 ## Part 1: Data
 
--   **Independence** - The data set is 651 randomly sampled movies produced and released before 2016. I have a concern about dependence of critics and general public ratings on published earlier reviews and ratings. I would argue that they are not independent and may be not suitable for modeling by OLS and at least it is a substantial source of a bias.
+-   **Independence** - The data set is 651 randomly sampled movies produced and released before 2016. I have a concern about dependence of critic and general public ratings on published earlier reviews and ratings. I would argue that they are not independent and may be not suitable for modeling by MLR (Multiple Linear Regression) and at least it is a substantial source of a bias.
 
--   **Type** **of research** - observational study - only correlations can be established
+-   **Type** **of research** - observational study, there is no random assignment - only correlations can be established
 
--   **Generalizability** - random sample was taken and number of observations are large, but here are considerations for generalizability:
+-   **Generalizability** - random sample was taken and the number of observations is large, but here are considerations for generalizability:
 
-    -   looks like the ratings are relevant to the USA ( and probably Canada) population only - to be sure need to check the audience of IMDb and Rotten Tomatoes web services.
+    -   it looks like the ratings are relevant to the USA ( and probably Canada) population only - to be sure need to check the audience of IMDb and Rotten Tomatoes web services.
 
     -   only three movie types - Documentary, Feature Film, TV Movie are featured
 
@@ -89,15 +88,15 @@ movies_test <- movies[-picked,]
 
 ### Popularity of the movie
 
-I will build a model to predict the popularity of the movie among general audience and critics using MLR (Multiple Linear Regression) on the given dataset, as well as research on each predictor variable independently during EDA (if something interesting there to be found). Also I will try to explain popularity if model allows.
+I will build a model to predict the popularity of the movies among general audiences and critics using MLR on the given dataset, as well as research on each predictor variable independently during the EDA (if something interesting is to be found). I will also try to explain popularity if the model allows.
 
 From <https://en.wikipedia.org/wiki/Rotten_Tomatoes#Influence>
 
 "The power of Rotten Tomatoes and fast-breaking word of mouth will only get stronger. Many Millennials and even Gen X-ers now vet every purchase through the Internet, whether it's restaurants, video games, make-up, consumer electronics or movies. As they get older and comprise an even larger share of total moviegoers, this behavior is unlikely to change".
 
-In [Part 4: Modeling] I will build a few models for predicting general audience rating and select the best based on the predicting performance.
+In [Part 4: Modeling] I will build a few models for predicting general audience rating and select the best model based on predicting performance.
 
-I will also build model for the `critics_score` to compare it with the general public score models.
+I will also build a model for predicting critic score - `critics_score` to compare it with general public score models.
 
 #### Response variables
 
@@ -187,7 +186,7 @@ Variables excluded from the potential regressors:
 
 : Excluded variables
 
-Each variable will be explored separately in EDA and decisions will be made accordingly.
+Each variable will be explored separately in the EDA and decisions will be made accordingly.
 
 ------------------------------------------------------------------------
 
@@ -340,7 +339,7 @@ movies %>%
     theme(legend.position = "none")
 ```
 
-We can see that the median `fin_score` is different among genres and some differences in the means are significantly.
+We can see that the median `fin_score` is different among genres and some differences in the means are significant.
 
 `genre` vs `critics_score`
 
@@ -564,7 +563,7 @@ model.full <- lm(fin_score ~
                 data = movies_short
                 )
 
-summary(model.full) %>% pander()
+summary(model.full)
 ```
 
 #### Backward selection
@@ -647,15 +646,15 @@ Let's be honest - there are some heteroscedasticity, quite a lot of outliers and
 
 4.  $\epsilon \sim N(0,\theta_\epsilon)$ Residuals and $y_i$ are normally distributed
 
-    They are not perfectly normal, but will do OK.
+    They are not perfectly normal, but it will do for now.
 
 5.  all $\epsilon_i$ have the same PDF - homoscedasticity
 
-    There are some heteroscedasticity, but will do OK for now.
+    There is some heteroscedasticity, but it will do for now.
 
 #### ML - Exhaustive search
 
-Let's use some silicon power =) There is not enough data and computational power to include interaction terms here, but let's compare with the manual model without interacting terms.
+Let's use some silicon power =) There is not enough data and computational power to include interaction terms here, but let's compare with the manual model without interaction terms.
 
 ```{r fin_score_mod_ML, fig.height=3}
 
@@ -673,7 +672,7 @@ This plot shows the best model (max adjusted R squared) which was found by the a
 
 ```{r ml_model_coef}
 
-res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))) %>% pander()
+(res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))) )
 ```
 
 I will save this model as:
@@ -716,7 +715,7 @@ Coefficients for this model
 
 ```{r model_critics_score_coef}
 
-res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))) %>% pander()
+(res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))))
 ```
 
 We can see that the model is slightly different. I will save this model as:
@@ -769,7 +768,7 @@ Coefficients for this model
 
 ```{r model_cross_coef}
 
-res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])) %>% pander()
+(res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])))
 ```
 
 Because search is not exhaustive it brings back different results each time it runs. I will save one of the models:
@@ -823,7 +822,7 @@ Some promising results, will see its predictive power later
 
 #### Elastic net regularization
 
-One of the method of model selection is regularization. It is a great tool to deal with overfitting. I will check if it yield interesting result in my case to help with collinearities and influential points.
+One of the methods of model selection is regularization. It is a great tool to deal with overfitting. I will check if it yields interesting results in my case to help with collinearities and influential points.
 
 ```{r elastic-reg}
 movies_glmnet <- movies_short %>% 
@@ -872,7 +871,7 @@ results
 
 ```
 
-We can see that results are not very impressive. Below are the coefficients of the best model
+We can see that the results are not very impressive. Below are the coefficients of the best model
 
 ```{r elastic_coefs}
 
@@ -880,7 +879,7 @@ model.net <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet
       family="gaussian")
 
 res_elastic <- coef(model.net,s = "lambda.min", exact=T)
-data.frame(name = res_elastic@Dimnames[[1]][res_elastic@i + 1], coefficient = res_elastic@x) %>% pander()
+data.frame(name = res_elastic@Dimnames[[1]][res_elastic@i + 1], coefficient = res_elastic@x) 
 ```
 
 Unfortunately I could not find how to extract separate levels for each of the factors.
@@ -915,7 +914,7 @@ Some promising results, I will compare testing results with the rest of the mode
 
 ## Part 5: Prediction
 
-Instead of one of the movie from 2016 I will use test part of the data. (at the beginning I split the original dataset in two - movies and movies_test. I used movies to train models. Now I will use the remain part to predict and compare my models)
+Instead of one of the movies from 2016 I will use the test part of the data. I used movies to train models. Now I will use the remain part to predict and compare my models.
 
 #### Handmade model
 
@@ -979,7 +978,7 @@ res_table <- rbind(res_table,calc_metrics(model.crit,movies_test,movies_test$cri
 res_table
 ```
 
-I did not include the elastic net model here because of poor performance on the test data previously. Looks like the best model for predicting `fin_score` is `model.interac` - the smallest MSE and the largest Efron's R\^2 and the worst is `model.leaps`. Model for predicting critics score `model.crit` has worse performance than any of the models for the general audience score. Which confirm that critics' opinion harder to predict.
+I did not include the elastic net model here because of poor performance on the test data previously. Looks like the best model for predicting `fin_score` is `model.interac` - the smallest MSE and the largest Efron's R\^2 and the worst is `model.leaps`. Model for predicting critics score `model.crit` has worse performance than any of the models for the general audience score. Which confirms that critics' opinions are less predictable.
 
 #### Diagnostic of the best model
 
@@ -993,7 +992,7 @@ par(mfrow = c(2,2))
 plot(model.interac)
 ```
 
-There are the same problem as in the handmade model - heteroscedasticity, residual distribution is left-skewed, outliers, leverage points and non-linear trend in the residuals. Definitely more research is needed.
+There are the same problems as in the handmade model - heteroscedasticity, residual distribution is left-skewed, outliers, leverage points and non-linear trend in the residuals. Definitely more research is needed.
 
 #### Advanced model diagnostics
 
@@ -1115,13 +1114,13 @@ Everything looks fine - big p-value, so we fail to reject $H_0$ - true autocorre
 
 1\) Model explanation
 
-For the explanation of the model I've chosen effect size over p-value, because if something is statistically significant it is not necessarily practically significant. In my opinion effect size shows more tangible connection with the real world.
+For the explanation of the model I've chosen effect size over p-value, because if something is statistically significant it is not necessarily practically significant. In my opinion, effect size shows more tangible connection with the real world.
 
 As a measure of the effect size I will use standardized model parameters (coefficients). The standardized parameter is the difference between the means in SD of the response variable (`fin_score`).
 
 More about standardized model parameters [<https://cran.r-project.org/web/packages/effectsize/vignettes/standardize_parameters.html>](https://cran.r-project.org/web/packages/effectsize/vignettes/standardize_parameters.html){.uri}
 
-As it is similar to a **Cohen's *d*** (Cohen's d is the distance between the means in units of [**pooled SDs**](https://easystats.github.io/effectsize/reference/sd_pooled.html).) I will use this rule of thump
+As it is similar to a **Cohen's *d*** (Cohen's d is the distance between the means in units of [**pooled SDs**](https://easystats.github.io/effectsize/reference/sd_pooled.html).) I will use this rule of thumb
 
 **Cohen (1988)**
 
@@ -1142,36 +1141,36 @@ effectsize(model.interac)
 
 -   `title_type`
 
-decreasing in 1 SD from its base level - "Documentary" for both "Feature Film" and "TV Movie"
+We can see a decline in 1 SD from its base level - "Documentary" for both levels - "Feature Film" and "TV Movie"
 
 -   `genre`
 
-    significant influence for many levels
+We can see a significant influence for many levels
 
--   `mpaa_rating` of a movie have substantial influence on its popularity.
+-   `mpaa_rating` of a movie has a substantial influence on its popularity.
 
 -   `thtr_rel_year`
 
-older movies have a small tendency to be rated higher by the audience
+Older movies have a small tendency to be rated higher by the audience
 
 -   `thtr_rel_month` and `dvd_rel_month`
 
-Month of a release has some influence too, but it is not a very strong effect size.
+Month of a release has some influence too, but it is not a very strong effect.
 
 -   `imdb_num_votes` and `best_pic_nom`
 
-We can see that the number of voters and if a movie had been nominated are correlated with its popularity with medium effect size.
+We can see that the number of voters and if a movie had been nominated are correlated with its popularity with the medium effect.
 
 -   `title_type:runtime`
 
-There is a very strong influence of the `runtime` variable (log of it if to be exact) on the "TV Movie" level of `title_type` But if you remember - there are only 5 movies this category - so it is probably just noise.
+There is a very strong influence of the `runtime` variable (log of it if to be exact) on the "TV Movie" level of the `title_type` But if you remember - there are only 5 movies in this category - so it is probably just a noise.
 
--   And finally enigmatic very small negative effect size of the `best_pic_win` most likely due to collinearities between this variable and `best_pic_nom`. If anyone knows the exact reason please let me know.
+-   And finally an enigmatic very small negative effect of the `best_pic_win` most likely due to collinearities between this variable and the `best_pic_nom`.
 
 2\) Quality of the model.
 
 Firstly - there is not enough information in the dataset - many predictor levels have too small numbers of observations. The best possible solution is to increase a sample size. Also methods like <https://www.researchgate.net/publication/257364616_SMOTE_for_Regression> can be useful if collecting more data is not an option.
 
-Another possible issue is the non independence of observations - if you violate the assumption of independence, **you run the risk that all of your results will be wrong**, so more research is needed.
+Another possible issue is the non-independence of observations - if you violate the assumption of independence, **you run the risk that all of your results will be wrong**, so more research is needed.
 
 There are a few other minor problems: overfitting, violation of normality, non-linearity, influential points, collinearity and heteroscedasticity (full house =)?). I've tried some options like robust regression and elastic net regularization to deal with it, but it was not very helpful. I would like to try some ensemble methods later.
