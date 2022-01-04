@@ -39,6 +39,7 @@ library(car)
 library(olsrr)
 library(tseries)
 library(effectsize)
+library(pander)
 ```
 
 ### Load data
@@ -88,17 +89,15 @@ movies_test <- movies[-picked,]
 
 ### Popularity of the movie
 
-I will build a model to predict the popularity of the movie among general audience and critics using OLS (ordinary least square regression) on the given dataset, as well as research on each predicted variable independently during EDA (if something interesting there to be found).
+I will build a model to predict the popularity of the movie among general audience and critics using MLR (Multiple Linear Regression) on the given dataset, as well as research on each predictor variable independently during EDA (if something interesting there to be found). Also I will try to explain popularity if model allows.
 
-In [Part 4: Modeling] I will build a few models:
+From <https://en.wikipedia.org/wiki/Rotten_Tomatoes#Influence>
 
--   model for the `fin_score` using manual backward selection with adjusted R^2^, as a criterion for the best model;
+"The power of Rotten Tomatoes and fast-breaking word of mouth will only get stronger. Many Millennials and even Gen X-ers now vet every purchase through the Internet, whether it's restaurants, video games, make-up, consumer electronics or movies. As they get older and comprise an even larger share of total moviegoers, this behavior is unlikely to change".
 
--   model for the `fin_score` using exhaustive search using `leaps` library with the same metric (adj R^2^);
+In [Part 4: Modeling] I will build a few models for predicting general audience rating and select the best based on the predicting performance.
 
--   model for the `fin_score` using cross-validation model selection technique from library `caret`, which uses the smallest prediction error as a criterion for the best model.
-
--   model for the `critics_score` to compare it with the general public score models.
+I will also build model for the `critics_score` to compare it with the general public score models.
 
 #### Response variables
 
@@ -565,12 +564,12 @@ model.full <- lm(fin_score ~
                 data = movies_short
                 )
 
-summary(model.full)
+summary(model.full) %>% pander()
 ```
 
 #### Backward selection
 
-I've chosen R^2^ based selection for maximizing predicting power from two options available - R^2^ based and $p$ based (course limitation). So explanatory ability in this context will suffer.
+I've chosen R^2^ based selection for maximizing predicting power from two options available - R^2^ based and p-value based (course limitation). So explanatory ability in this context will suffer.
 
 Based on the full model adjusted R^2^ = 0.4606, I eliminated one predictor at a time
 
@@ -609,7 +608,7 @@ In the first round variable `thtr_rel_month` will be removed - 0.463912
 
 Final model with adjusted R^2^ - 0.4665
 
-#### Diagnostic of the model
+#### Diagnostic of the handmade model
 
 ```{r fin_model_diagn}
 hist_pl_fin <- ggplot(data = model.hm, aes(x = .resid)) +
@@ -625,14 +624,34 @@ plot_grid(
   labels = c('Distribution', 'QQ norm'), label_size = 12)
 ```
 
-Distribution of residuals looks left - skewed without outliers.
+Distribution of residuals left - skewed with some outliers.
 
 ```{r fin_model_res_plots, fig.height=6}
 par(mfrow = c(2,2))
 plot(model.hm)
 ```
 
-Residual plots look OK - fit is not perfect, but good enough, reasonably homoskedastic with some influential points.
+Let's be honest - there are some heteroscedasticity, quite a lot of outliers and leverage points (some of them can be influential) and suspected non-linear trend in the residuals (could be due to independence violation, more research is needed)
+
+##### OLS assumptions
+
+1.  $\epsilon$ is a random variable that does not depend on X - "perfect model"
+
+    Residual plot shows a pattern?
+
+2.  $E(\epsilon)=0$ (always true for a model with an intercept)
+
+3.  All $\epsilon_i$ are independent of each other (they are uncorrelated for the population, but not for the sample)
+
+    \[Residuals autocorrelation\] in the full version
+
+4.  $\epsilon \sim N(0,\theta_\epsilon)$ Residuals and $y_i$ are normally distributed
+
+    They are not perfectly normal, but will do OK.
+
+5.  all $\epsilon_i$ have the same PDF - homoscedasticity
+
+    There are some heteroscedasticity, but will do OK for now.
 
 #### ML - Exhaustive search
 
@@ -654,7 +673,7 @@ This plot shows the best model (max adjusted R squared) which was found by the a
 
 ```{r ml_model_coef}
 
-(res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))))
+res_leaps<-as.data.frame(coef(leaps,which.max(sum$adjr2))) %>% pander()
 ```
 
 I will save this model as:
@@ -697,7 +716,7 @@ Coefficients for this model
 
 ```{r model_critics_score_coef}
 
-(res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))))
+res_critics <- as.data.frame(coef(leaps_cr,which.max(sum_cr$adjr2))) %>% pander()
 ```
 
 We can see that the model is slightly different. I will save this model as:
@@ -718,12 +737,12 @@ model.crit = lm (critics_score ~
                   data = movies_short
                   )
 
-summary(model.crit)
+summary(model.crit)$adj.r.squared
 ```
 
 Model for the `critics_score` has lower adjusted R^2^ than the similar ML model for the `fin_score` and different regressors.
 
-Critics rating is harder to explain and predict than general audience's
+Critics rating is harder to predict than general audience's (and most likely to explain too).
 
 #### Cross validation selection
 
@@ -750,10 +769,10 @@ Coefficients for this model
 
 ```{r model_cross_coef}
 
-(res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])))
+res_caret <- as.data.frame(coef(step.model$finalModel, step.model$bestTune[[1]])) %>% pander()
 ```
 
-Because search is not exhaustive it brings back different results each time. I will save one of the models:
+Because search is not exhaustive it brings back different results each time it runs. I will save one of the models:
 
 ```{r caret_model}
 
@@ -775,135 +794,34 @@ model.caret <- lm(fin_score ~
 summary(model.caret)$adj.r.squared
 ```
 
-#### Advanced model diagnostics
+#### Interaction terms
 
-##### OLS assumptions
+I will add one more model which will include interaction term between `runtime` and `title_type` (based on the previous `model.caret` ).
 
-1.  $\epsilon$ is a random variable that does not depend on X - "perfect model"
+```{r model_interact}
+ 
+model.interac <- lm(fin_score ~ 
+                    title_type +
+                    genre +
+                    runtime +
+                    mpaa_rating +
+                    thtr_rel_year +
+                    thtr_rel_month +
+                    dvd_rel_year +
+                    dvd_rel_month +
+                    imdb_num_votes +
+                    best_pic_nom +
+                    best_pic_win +   
+                    title_type*runtime,   
+                data = movies_short
+                )
 
-    We checked it earlier - residual plot shows no obvious patterns
-
-2.  $E(\epsilon)=0$ (always true for a model with an intercept)
-
-3.  All $\epsilon_i$ are independent of each other (they are uncorrelated for the population, but not for the sample)
-
-    [Residuals autocorrelation]
-
-4.  $\epsilon \sim N(0,\theta_\epsilon)$ Residuals and $y_i$ are normally distributed
-
-    We checked it earlier by QQ plot. They are not perfectly normal, but will do OK.
-
-5.  all $\epsilon_i$ have the same PDF - homoscedasticity
-
-    We checked it earlier by residual plot.
-
-##### Collinearity
-
-High collinearity of the predictor variables can lead to unstable coefficients and unreliable SE for these coefficients which make the model not suitable for explanation but can be perfectly fine for predicting purposes.
-
-variance inflation factors (Are any \> 5 or 10?)
-
-```{r collinear_clean}
-
-vif(model.hm) 
+summary(model.interac)$adj.r.squared
 ```
 
-We can see that `genre` and `title_type` are under suspicion, but as the main purpose for the model is predicting power I will leave it as is.
+Some promising results, will see its predictive power later
 
-##### Influential points
-
-Quality of the model highly depends on the amount of influential points and ability of the model to deal with them.
-
-###### Studentized residuals
-
-Creating studentized (standardized) residuals to run tests.
-
-Internally studentized residuals - all data are included in the calculation
-
-$$
-isr_i=\dfrac{e_i}{SE(e_i)} = \dfrac{e_i}{s_e\sqrt{1-h_{ii}}}
-$$
-
-Externally studentized residuals - the $i_{th}$ data point is excluded from the calculation. T-distributed (if $\epsilon_i \sim N(0,\sigma_\epsilon) iid$ )
-
-$$
-esr_i=isr_i\sqrt{ \dfrac{n-p-1}{n-p-isr^2_i} }
-$$
-
-```{r full_model_esr}
-
-ma_stud = rstudent(model.hm)
-ols_plot_resid_stud(model.hm)
-```
-
-We can see some outliers
-
-###### Williams graph
-
-Slightly more convenient way to search for influential points than standard graph from model diagnostic plot "Residuals vs leverage"
-
-```{r full_model_williams}
-
-ols_plot_resid_lev(model.hm)
-```
-
-We can see a lot of outliers and leverage points, few of which are influential
-
-###### Cook's distance
-
-A data point having a large cook's d indicates that the data point strongly influences the fitted values.
-
-$$
-D_i = \dfrac{isr_i^2}{p}\dfrac{h_{ii}}{(1-h_{ii})}
-$$
-
-```{r full_model_cooks_graph}
-
-ols_plot_cooksd_chart(model.hm)
-```
-
-This graph shows that I have a lot of influential points above 0.00623053
-
-###### Difference in Beta
-
-DFBETA measures the difference in each parameter estimate with and without the influential point. There is a DFBETA for each data point i.e if there are n observations and k variables, there will be n∗k DFBETAs. In general, large values of DFBETAS indicate observations that are influential in estimating a given parameter. Belsley, Kuh, and Welsch recommend 2 as a general cutoff value to indicate influential observations and $\sqrt{4/n}$ as a size-adjusted cutoff.
-
-$$
-DFBETA_{k,i} = \dfrac{b_k - b_{k(i)}}{SE(b_{k(i)})}
-$$
-
-I'm not going to make plots, because will be too many, just point out amount of points above the limit:
-
-```{r full_model_dfbeta}
-
-length(abs(dfbeta(model.hm))[abs(dfbeta(model.hm))>sqrt(4/length(ma_stud))])
-```
-
-I've got a lot of suspicious points - not a perfect result. Most probably OLS is the not ideal tool to use with this dataset. I would definitely like to try out different tools.
-
-##### Residuals autocorrelation
-
-Checking for "omitted variables" which can leave traces in the residuals in the form of auto-correlation ( or inadvertent time series ).
-
-Lag plot
-
-```{r adv_model_autocor_lag plot}
-
-lag.plot(model.hm$residual, lags = 1, do.lines = F, labels = F)
-```
-
-Looks good - no visible correlation
-
-Durbin--Watson statistic
-
-```{r adv_model_}
-
-dwtest(model.hm)
-```
-
-Everything looks fine - big p-value, so we fail to reject $H_0$ - true autocorrelation is 0
-
-### Elastic net regularization
+#### Elastic net regularization
 
 One of the method of model selection is regularization. It is a great tool to deal with overfitting. I will check if it yield interesting result in my case to help with collinearities and influential points.
 
@@ -935,18 +853,18 @@ results <- data.frame()
 
 for (i in 0:10) {
 
-   fit.name <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet), 
+  fit.name <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet), 
               type.measure="mse", alpha=i/10, family="gaussian")
   
   pred <- predict(fit.name, s=fit.name$lambda.min, newx=data.matrix(movies_test_glmnet))
   
   ## Metrics
-  mse <- mean((movies_test$fin_score - pred)^2,na.rm=T)
+  MSE <- mean((movies_test$fin_score - pred)^2,na.rm=T)
   efR <- 1 - sum( (movies_test$fin_score - pred)^2 ,na.rm=T)/
     sum( (movies_test$fin_score-mean(movies_test$fin_score,na.rm=T))^2 ,na.rm=T)
   
   ## Store the results
-  results <- rbind(results, data.frame(alpha=i/10, mse=mse, efR = efR))
+  results <- rbind(results, data.frame(alpha=i/10, MSE=MSE, efR = efR))
   
 }
 
@@ -961,13 +879,13 @@ We can see that results are not very impressive. Below are the coefficients of t
 model.net <- cv.glmnet(y = movies_short$fin_score, x = data.matrix(movies_glmnet), type.measure="mse", alpha=0.2, 
       family="gaussian")
 
-tmp_coeffs <- coef(model.net,s = "lambda.min", exact=T)
-data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x)
+res_elastic <- coef(model.net,s = "lambda.min", exact=T)
+data.frame(name = res_elastic@Dimnames[[1]][res_elastic@i + 1], coefficient = res_elastic@x) %>% pander()
 ```
 
 Unfortunately I could not find how to extract separate levels for each of the factors.
 
-### Robust regression
+#### Robust regression
 
 As another method of dealing with influential points I will try robust regression.
 
@@ -976,28 +894,28 @@ As another method of dealing with influential points I will try robust regressio
 library(robustbase)
 
 model.robust = lmrob(fin_score ~ 
-                  title_type +
-                  genre +
-                  runtime +
-                  mpaa_rating +
-                  thtr_rel_year +
-                  #thtr_rel_month +
-                  #####dvd_rel_year + 
-                  dvd_rel_month + 
-                  imdb_num_votes +
-                  best_pic_nom +
-                  ####best_pic_win +
-                  best_ac_win , 
-                  ###best_dir_win,  
-                  ##top200_box, 
+                    title_type +
+                    genre +
+                    runtime +
+                    mpaa_rating +
+                    thtr_rel_year +
+                    thtr_rel_month +
+                    dvd_rel_year +
+                    dvd_rel_month +
+                    imdb_num_votes +
+                    best_pic_nom +
+                    best_pic_win +   
+                    title_type*runtime,
                 data = movies_short)
 
-summary(model.robust)
+summary(model.robust)$adj.r.squared
 ```
 
-Some promising results with adjusted R^2^ 0.5088. I will compare testing results with the rest of the models
+Some promising results, I will compare testing results with the rest of the models
 
 ## Part 5: Prediction
+
+Instead of one of the movie from 2016 I will use test part of the data. (at the beginning I split the original dataset in two - movies and movies_test. I used movies to train models. Now I will use the remain part to predict and compare my models)
 
 #### Handmade model
 
@@ -1016,11 +934,9 @@ pred <- predict(model.hm, movies_test)
 head(cbind(actual=movies_test$fin_score, predicted=pred))
 ```
 
-We can see that the uncertainty in the prediction values is very high.
+We can see that the uncertainty in the prediction values is very high and precision is not great as well.
 
 #### Comparing models
-
-At the beginning I split the original dataset in two - movies and movies_test. I used movies to train models. Now I will use the remain part to compare my models
 
 Some metrics which based on means of not squared parameters (Min-Max Accuracy and Mean Absolute Percentage Error (MAPE) for example) are stopped working after normalization of response variables
 
@@ -1057,26 +973,205 @@ res_table <- calc_metrics(model.full,movies_test,movies_test$fin_score)
 res_table <- rbind(res_table,calc_metrics(model.hm,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.leaps,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.caret,movies_test,movies_test$fin_score))
+res_table <- rbind(res_table,calc_metrics(model.interac,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.robust,movies_test,movies_test$fin_score))
 res_table <- rbind(res_table,calc_metrics(model.crit,movies_test,movies_test$critics_score))
 res_table
 ```
 
+I did not include the elastic net model here because of poor performance on the test data previously. Looks like the best model for predicting `fin_score` is `model.interac` - the smallest MSE and the largest Efron's R\^2 and the worst is `model.leaps`. Model for predicting critics score `model.crit` has worse performance than any of the models for the general audience score. Which confirm that critics' opinion harder to predict.
+
+#### Diagnostic of the best model
+
+The best model seems to be the model based on the cross-validation selection technique with interaction terms `model.interac`.
+
+Let's check if this model comply with OLS assumptions
+
+```{r best_model_diagnostic, fig.height=6}
+
+par(mfrow = c(2,2))
+plot(model.interac)
+```
+
+There are the same problem as in the handmade model - heteroscedasticity, residual distribution is left-skewed, outliers, leverage points and non-linear trend in the residuals. Definitely more research is needed.
+
+#### Advanced model diagnostics
+
+##### Collinearity
+
+High collinearity of the predictor variables can lead to unstable coefficients and unreliable SE for these coefficients which make the model not suitable for explanation but can be perfectly fine for predicting purposes.
+
+variance inflation factors (Are any \> 5 or 10?)
+
+```{r collinear_clean}
+
+vif(model.interac) 
+```
+
+We can see that `title_type` and it's interaction term are under suspicion, but as the main purpose for the model is predicting power I will leave it as is.
+
+##### Influential points
+
+Quality of the model highly depends on the amount of influential points and ability of the model to deal with them.
+
+###### Studentized residuals
+
+Creating studentized (standardized) residuals to run tests.
+
+Internally studentized residuals - all data are included in the calculation
+
+$$
+isr_i=\dfrac{e_i}{SE(e_i)} = \dfrac{e_i}{s_e\sqrt{1-h_{ii}}}
+$$
+
+Externally studentized residuals - the $i_{th}$ data point is excluded from the calculation. T-distributed (if $\epsilon_i \sim N(0,\sigma_\epsilon) iid$ )
+
+$$
+esr_i=isr_i\sqrt{ \dfrac{n-p-1}{n-p-isr^2_i} }
+$$
+
+```{r full_model_esr}
+
+ma_stud = rstudent(model.interac)
+ols_plot_resid_stud(model.interac)
+```
+
+We can see some outliers
+
+###### Williams graph
+
+Slightly more convenient way to search for influential points than standard graph from model diagnostic plot "Residuals vs leverage"
+
+```{r full_model_williams}
+
+ols_plot_resid_lev(model.interac)
+```
+
+We can see a lot of outliers and leverage points, few of which are influential
+
+###### Cook's distance
+
+A data point having a large cook's d indicates that the data point strongly influences the fitted values.
+
+$$
+D_i = \dfrac{isr_i^2}{p}\dfrac{h_{ii}}{(1-h_{ii})}
+$$
+
+```{r full_model_cooks_graph}
+
+ols_plot_cooksd_chart(model.interac)
+```
+
+This graph shows that I have a lot of influential points above 0.007
+
+###### Difference in Beta
+
+DFBETA measures the difference in each parameter estimate with and without the influential point. There is a DFBETA for each data point i.e if there are n observations and k variables, there will be n∗k DFBETAs. In general, large values of DFBETAS indicate observations that are influential in estimating a given parameter. Belsley, Kuh, and Welsch recommend 2 as a general cutoff and *2/√(n)* as a size-adjusted cutoff to indicate influential observations.
+
+$$
+DFBETA_{k,i} = \dfrac{b_k - b_{k(i)}}{SE(b_{k(i)})}
+$$
+
+I'm not going to make plots, because will be too many, just point out amount of points above the limit:
+
+```{r full_model_dfbeta}
+
+#number of points above 2 and  2/√(n)
+dfbetas <- dfbeta(model.interac) 
+df<-data.frame(
+  length(dfbetas[abs(dfbetas)>2]),
+  length(dfbetas[abs(dfbetas)>2/sqrt(length(ma_stud))])
+)
+names(df) <- c("Above 2","Above 2/√(n)") 
+df
+```
+
+\
+I've got quite a lot of suspicious points - not a perfect result. Looks like overfitting?
+
+##### Residuals autocorrelation
+
+Checking for "omitted variables" which can leave traces in the residuals in the form of auto-correlation ( or inadvertent time series ).
+
+Lag plot
+
+```{r adv_model_autocor_lag plot}
+
+lag.plot(model.interac$residual, lags = 1, do.lines = F, labels = F)
+```
+
+Looks good - no visible correlation
+
+Durbin--Watson statistic
+
+```{r adv_model_}
+
+dwtest(model.interac)
+```
+
+Everything looks fine - big p-value, so we fail to reject $H_0$ - true autocorrelation is 0
+
 ## Part 6: Conclusion
 
-1\) Model effect size
+1\) Model explanation
 
-Best model according to the test data is `model.caret` but we will look at the coefficients of the manually created model
+For the explanation of the model I've chosen effect size over p-value, because if something is statistically significant it is not necessarily practically significant. In my opinion effect size shows more tangible connection with the real world.
+
+As a measure of the effect size I will use standardized model parameters (coefficients). The standardized parameter is the difference between the means in SD of the response variable (`fin_score`).
+
+More about standardized model parameters [<https://cran.r-project.org/web/packages/effectsize/vignettes/standardize_parameters.html>](https://cran.r-project.org/web/packages/effectsize/vignettes/standardize_parameters.html){.uri}
+
+As it is similar to a **Cohen's *d*** (Cohen's d is the distance between the means in units of [**pooled SDs**](https://easystats.github.io/effectsize/reference/sd_pooled.html).) I will use this rule of thump
+
+**Cohen (1988)**
+
+-   **d \< 0.2** - Very small
+
+-   **0.2 \<= d \< 0.5** - Small
+
+-   **0.5 \<= d \< 0.8** - Medium
+
+-   **d >= 0.8** - Large
+
+Best model according to the test data is `model.interac` :
 
 ```{r best_model_effect}
 
-effectsize(model.hm)
+effectsize(model.interac)
 ```
 
-We can see that type, genre and mpaa rating of a movie have substantial influence on its popularity. We can also see that older movies have a tendency to be rated higher by the audience. Month of a release has some influence too, but it is not a very strong effect size. And finally we can see that the number of voters and if a movie had been nominated are correlated with its popularity.
+-   `title_type`
+
+decreasing in 1 SD from its base level - "Documentary" for both "Feature Film" and "TV Movie"
+
+-   `genre`
+
+    significant influence for many levels
+
+-   `mpaa_rating` of a movie have substantial influence on its popularity.
+
+-   `thtr_rel_year`
+
+older movies have a small tendency to be rated higher by the audience
+
+-   `thtr_rel_month` and `dvd_rel_month`
+
+Month of a release has some influence too, but it is not a very strong effect size.
+
+-   `imdb_num_votes` and `best_pic_nom`
+
+We can see that the number of voters and if a movie had been nominated are correlated with its popularity with medium effect size.
+
+-   `title_type:runtime`
+
+There is a very strong influence of the `runtime` variable (log of it if to be exact) on the "TV Movie" level of `title_type` But if you remember - there are only 5 movies this category - so it is probably just noise.
+
+-   And finally enigmatic very small negative effect size of the `best_pic_win` most likely due to collinearities between this variable and `best_pic_nom`. If anyone knows the exact reason please let me know.
 
 2\) Quality of the model.
 
-Firstly - there is not enough information in the dataset - many predictor's levels have too small numbers of observations. The best possible solution is to increase a sample size. Also methods like <https://www.researchgate.net/publication/257364616_SMOTE_for_Regression> can be useful if collecting more data is not an option.
+Firstly - there is not enough information in the dataset - many predictor levels have too small numbers of observations. The best possible solution is to increase a sample size. Also methods like <https://www.researchgate.net/publication/257364616_SMOTE_for_Regression> can be useful if collecting more data is not an option.
 
-There are a couple of other problems: influential points and collinearity. I would like to try some ensemble methods later.
+Another possible issue is the non independence of observations - if you violate the assumption of independence, **you run the risk that all of your results will be wrong**, so more research is needed.
+
+There are a few other minor problems: overfitting, violation of normality, non-linearity, influential points, collinearity and heteroscedasticity (full house =)?). I've tried some options like robust regression and elastic net regularization to deal with it, but it was not very helpful. I would like to try some ensemble methods later.
