@@ -1,0 +1,848 @@
+---
+title: 'Modeling and prediction for movies'
+subtitle: 'Bayesian Regression'
+author: 'Anna Loznevaia'
+date: '`r Sys.Date()`'
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 6
+---
+
+```{r}
+
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+knitr::opts_chunk$set(rows.print=25)
+```
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(GGally)
+library(BAS)
+library(cowplot)
+```
+
+## Part 1: Data
+
+-   **Independence** - The data set is 651 randomly sampled movies produced and released before 2016. I have a concern about dependence of critic and general public ratings on published earlier reviews and ratings. I would argue that they are not independent and may be not suitable for modeling by MLR (Multiple Linear Regression) and at least it is a substantial source of a bias.
+
+-   **Type** **of research** - observational study, there is no random assignment - only correlations can be established
+
+-   **Generalizability** - random sample was taken and the number of observations is large, but here are considerations for generalizability:
+
+    -   Seems like the ratings are relevant to the USA ( and probably Canada) population only - to be sure need to check the audience of IMDb and Rotten Tomatoes web services.
+
+    -   only three movie types - Documentary, Feature Film, TV Movie are featured
+
+    -   released from 1970 to 2016
+
+    -   bias source related to how scores are calculated (see below in bias sources)
+
+### Research question
+
+The research question was given in a closed form as follows:
+
+Develop a Bayesian regression model to predict `audience_score` from the following explanatory variables: `feature_film`, `drama`, `runtime`, `mpaa_rating_R`, `thtr_rel_year`, `oscar_season`, `summer_season`, `imdb_rating`, `imdb_num_votes`, `critics_score`, `best_pic_nom`, `best_pic_win`, `best_actor_win`, `best_actress_win`, `best_dir_win`, `top200_box`
+
+### Bias sources
+
+from [\<https://www.makeuseof.com/tag/best-movie-ratings-sites/>](https://www.makeuseof.com/tag/best-movie-ratings-sites/){.uri}
+
+> The biggest issue with Rotten Tomatoes is that it breaks down complex opinions into a **Yes** or **No** score. It scores a critic who thought the movie was decent but had some flaws (say, a 59 percent rating) the same as one who thought the movie was absolute garbage (a zero percent score).
+>
+> You'll notice this with the **Average Rating** under the score. Take Jumanji: Welcome to the Jungle as an example. Of the 232 critic reviews, 177 of them are positive. This gives the movie a score of 76 percent. However, the critics rated the movie an average of 6.2/10---quite a bit under the 76 percent displayed on the page.
+
+So it raises a concern about bias in both the `audience_score` and the `critics_score`. They both as well will suffer from the response bias - it is more likely to leave a review if you have a strong opinion on the subject - either positive or negative.
+
+------------------------------------------------------------------------
+
+## Part 2: Data manipulation
+
+### Load data
+
+```{r load-data}
+load('movies.Rdata')
+```
+
+### New variables
+
+```{r movies_new_vars}
+
+# feature_film
+movies <- movies %>% 
+  mutate( feature_film = 
+            as.factor(case_when(title_type=='Feature Film' ~  'Yes', TRUE ~ 'No')))
+
+# drama
+movies <- movies %>% 
+  mutate( drama = 
+            as.factor(case_when(genre=='Drama' ~  'Yes', TRUE ~ 'No')))
+
+# mpaa_rating_R
+movies <- movies %>% 
+  mutate( mpaa_rating_R = 
+            as.factor(case_when(mpaa_rating=='R' ~  'Yes', TRUE ~ 'No')))
+
+# oscar_season
+movies <- movies %>% 
+  mutate( oscar_season = 
+            as.factor(case_when(thtr_rel_month %in% c(10,11,12) ~  'Yes', 
+                                TRUE ~ 'No')))
+# summer_season
+movies <- movies %>% 
+  mutate( summer_season = 
+            as.factor(case_when(thtr_rel_month %in% c(5,6,7,8) ~  'Yes', 
+                                TRUE ~ 'No')))
+```
+
+### Split dataset to the train/test
+
+```{r dataset_splitting}
+#strip some data for prediction
+train_size <- floor(0.90*nrow(movies))
+set.seed(666)
+
+# randomly split data
+picked <- sample(seq_len(nrow(movies)),size = train_size)
+movies <- movies[picked,]
+movies_test <- movies[-picked,]
+```
+
+------------------------------------------------------------------------
+
+## Part 3: Exploratory data analysis
+
+### Response variable
+
+Distribution of the `audience_score`
+
+```{r EDA_response_var_summary}
+
+summary(movies$audience_score)
+```
+
+```{r fin_score_dens, fig.height=3}
+
+movies %>% ggplot() +
+  aes(x=audience_score) +
+  geom_density()
+```
+
+Distribution of the `audience_score` is left skewed, without visible outliers.
+
+### Regressors
+
+#### `feature_film`
+
+```{r feature_film_count}
+
+movies %>% 
+  count(feature_film)
+```
+
+We can see that there are about 9 times more feature films than non-feature films.
+
+`audience_score` vs `feature_film`
+
+```{r feature_film_audience_score}
+
+ggpairs(movies,columns = c('audience_score','feature_film'))
+```
+
+We can see that median `audience_score` is noticeably different in the two groups.
+
+#### `drama`
+
+`drama` vs `audience_score`
+
+```{r drama_audience_score}
+
+ggpairs(movies,columns = c('audience_score','drama'))
+```
+
+We can see that drama/non-drama counts are almost equal. Median `audience_score` is noticeably different among the groups.
+
+#### `runtime`
+
+`runtime` vs `fin_score`
+
+```{r runtime_fin_score}
+
+ggpairs(movies,columns = c('audience_score','runtime'))
+```
+
+Distribution of `runtime` is right-skewed with some outliers. There is a heteroscedasticity, so let's try a log transformation.
+
+```{r runtime_distr}
+
+movies %>% ggplot() +
+  aes(x=log(runtime)) +
+  geom_histogram(binwidth = 0.1)
+```
+
+We can see that after applying log transformation the distribution is more symmetric with a few outliers.
+
+```{r runtime_lm}
+
+movies %>% ggplot() +
+  aes(x=log(runtime),y=audience_score) +
+  geom_point() +
+  geom_smooth(method='lm')
+```
+
+But unfortunately it does not help much with heteroscedasticity, but I will use it anyway because it makes distribution more symmetric and close to normal.
+
+#### `mpaa_rating_R`
+
+`mpaa_rating_R` vs `fin_score`
+
+```{r mpaa_rating_audience_score}
+
+ggpairs(movies,columns = c('audience_score','mpaa_rating_R'))
+```
+
+We can see that R/non-R mpaa rating counts are almost equal. I can not see any noticeable `audience_score` difference among the groups.
+
+#### `thtr_rel_year`
+
+Distribution of the `thtr_rel_year`
+
+```{r thtr_rel_year_distr}
+summary(movies$thtr_rel_year)
+```
+
+```{r thtr_rel_year_dens}
+
+movies %>% ggplot()+
+  aes(x=thtr_rel_year) +
+  geom_density()
+```
+
+We can see that there are not much movies released before 1980:
+
+```{r release_year_old_movies}
+
+ecdf(movies$thtr_rel_year)(1980)
+```
+
+which can be the source of a bias.
+
+`thtr_rel_year` vs `audience_score`
+
+```{r thtr_year_audience_score}
+
+ggpairs(movies,columns = c('audience_score','thtr_rel_year'))
+```
+
+We can see a weak negative correlation between `thtr_rel_year` and `audience_score`
+
+#### `oscar_season`
+
+```{r oscar_seaseon_vs_audience_score}
+
+ggpairs(movies,columns = c('audience_score','oscar_season'))
+```
+
+We can see pretty fair count among the groups (Oscar season consists of three months - November, October, December). We can see a noticeable difference for the median `audience_score` among the groups (higher for the Oscar season).
+
+#### `summer_season`
+
+```{r summer_seaseon_vs_audience_score}
+
+ggpairs(movies,columns = c('audience_score','summer_season'))
+```
+
+We can see pretty fair count among the groups (Summer season consists of four months - May, June, July, August). We can see a small difference for the median `audience_score` among the groups (lower for the summer season).
+
+#### `imdb_rating` and `critics_score`
+
+I will **NOT** include `imdb_rating` variable in my analysis because it is basically the same thing as the response variable - the audience score from the different web site. Of course they will be highly correlated! It is not helpful in explaining the response variable at all. The prediction based on this variable also seems useless - if you see that a movie is popular on the IMDB it is obvious to see the same on the Rotten Tomatoes (the same US general audience). They have a slightly different distribution because of the calculation technique used at the Rotten Tomatoes. It is almost the same story with the `critics_score`, but the correlation is a bit less because critics in general have higher standards for the evaluation of a movie.
+
+```{r imdb_rating_vs_critics_score_vs_audience_score}
+
+ggpairs(movies,columns = c('audience_score','imdb_rating','critics_score'))
+```
+
+#### `imdb_num_votes`
+
+`imdb_num_votes` vs `audience_score`
+
+```{r imdb_num_audience_score}
+
+ggpairs(movies,columns = c('imdb_num_votes','audience_score'))
+```
+
+Distribution of `imdb_num_votes` is heavily right-skewed with some outliers.
+
+There is a significant heteroscedasticity. Let's try log transformation.
+
+```{r imdb_num_votes_distr}
+
+movies %>% ggplot() +
+  aes(x=log(imdb_num_votes)) +
+  geom_histogram(binwidth = 0.2)
+```
+
+We can see that after applying log transformation the distribution is much more symmetric.
+
+```{r imdb_num_votes_lm}
+
+movies %>% ggplot() +
+  aes(x=log(imdb_num_votes),y=audience_score) +
+  geom_point() +
+  geom_smooth(method='lm')
+```
+
+We can see that heteroscedasticity also is much better after log transformation, so I will use it in the model
+
+#### `best_pic_nom` and `best_pic_win`
+
+`best_pic_nom` vs `audience_score`
+
+```{r best_pic_nom_audience_score}
+
+ggpairs(movies, columns = c('audience_score','best_pic_nom'))
+    
+```
+
+We can see that the medians differ substantially, but the number of nominated movies is very small.
+
+```{r best_pic_nom_sum}
+
+movies %>% 
+  count(best_pic_nom)
+```
+
+`best_pic_win` vs `audience_score`
+
+```{r best_pic_win_audience_score}
+
+ggpairs(movies, columns = c('audience_score','best_pic_win'))
+    
+```
+
+We can see that the medians differ substantially, but the number of Oscar winners is tiny.
+
+```{r best_pic_win_sum}
+
+movies %>% 
+  count(best_pic_win)
+```
+
+#### `best_actor_win` and `best_actress_win`
+
+I will create a new indicator variable `best_ac_win` which includes if any one of the gender wins
+
+```{r best_actor}
+
+movies <- movies %>% 
+  mutate(
+    best_ac_win = if_else(best_actor_win=='yes' | best_actress_win=='yes','yes','no'))
+
+movies_test <- movies_test %>% 
+  mutate(
+    best_ac_win = if_else(best_actor_win=='yes' | best_actress_win=='yes','yes','no'))
+```
+
+`best_ac_win` vs `audience_score`
+
+```{r best_actor_audience_score}
+
+ggpairs(movies, columns = c('audience_score','best_ac_win')) 
+```
+
+I do not see any substantial difference in the medians here.
+
+#### `best_dir_win`
+
+`best_dir_win` vs `audience_score`
+
+```{r best_dir_fin_score}
+
+ggpairs(movies, columns = c('audience_score', 'best_dir_win')) 
+```
+
+We can see a difference in the means, but there are a small number of counts in the winner category.
+
+#### `top200_box`
+
+`top200_box` vs `audience_score`
+
+```{r top200_audience_score}
+
+ggpairs(movies, columns = c('audience_score','top200_box'))
+```
+
+We can see a difference in the medians, but there are too small counts in the 'Yes' category. Also there are two outliers.
+
+#### `movies_short`
+
+I will create a short version of the dataset containing only usable variables with all transformations.
+
+```{r movies_short}
+
+movies_short <- movies %>% 
+  select (
+    audience_score,
+    critics_score,
+    feature_film,
+    drama,
+    runtime,
+    mpaa_rating_R,
+    thtr_rel_year,
+    oscar_season,
+    summer_season, 
+    imdb_num_votes,
+    best_pic_nom,
+    best_pic_win, 
+    best_ac_win, 
+    best_dir_win, 
+    top200_box ) %>% 
+  mutate(runtime = log(runtime), imdb_num_votes = log(imdb_num_votes))
+
+movies_test <- movies_test %>% 
+  mutate(runtime = log(runtime), imdb_num_votes = log(imdb_num_votes))
+```
+
+------------------------------------------------------------------------
+
+## Part 4: Modeling
+
+I have tried to incorporate interaction terms in the modeling but it did not work - r session was eating up all the memory and stopped responding. I have tried two methods of sampling - deterministic and MCMC. So I will use only the first order terms without interactions.
+
+I will make three models - with reference prior using BIC and AIC approximation and Jeffreys-Zellner-Siow prior, compare them on test data and choose one which does the best job. As the 'best single' model I'm going to use BMA to incorporate variable inclusion uncertainty.
+
+### Models
+
+We have 14 variables which give us 2^14^ models - it should be easy to enumerate them. For reference prior I will use BIC and AIC for approximation. For Jeffreys-Zellner-Siow prior I will use the 'EB-local' method which uses the MLE of g from the marginal likelihood within each model.
+
+```{r model_ZS}
+
+#Reference prior with BIC
+model.BIC <-  bas.lm(audience_score ~ ., data=movies_short,
+                   prior='BIC', modelprior=uniform()) 
+
+#Reference prior with AIC
+model.AIC <-  bas.lm(audience_score ~ ., data=movies_short,
+                   prior='AIC', modelprior=uniform()) 
+
+# Empirical Bayesian estimation under maximum marginal likelihood
+model.EB <- bas.lm(audience_score ~ ., data=movies_short, prior='EB-local', 
+                a=nrow(movies_short), modelprior=uniform())
+
+```
+
+### Comparing posterior inclusion probability (PIP)
+
+Let's compare the PIP of predictors in each of three models.
+
+```{r models_pip_compare, fig.height=6}
+
+probne0 <- cbind(model.BIC$probne0, model.EB$probne0, model.AIC$probne0)
+colnames(probne0) <- c('BIC', 'EB', 'AIC')
+rownames(probne0) <- c(model.BIC$namesx)
+
+# Generate plot for each variable and save in a list
+plt_list <- list()
+for (i in 2:15){
+  df <- data.frame(prior = colnames(probne0), posterior = probne0[i, ])
+  df$prior <- factor(df$prior, levels = colnames(probne0))
+  plt <- ggplot(df, aes(x = prior, y = posterior)) +
+          geom_bar(stat = 'identity', fill = 'blue') + xlab('') +
+          ylab('') + 
+          ggtitle(model.BIC$namesx[i])
+  plt_list <- c(plt_list, list(plt))
+}
+
+do.call(plot_grid, c(plt_list))
+```
+
+We can see that these three models do agree on some of the variables with high pip - `critics_score`, `future_film`, `drama`, `thtr_rel_year` and `imdb_num_votes`. For the other variables - BIC model is the most conservative, AIC the most inclusive and EB somewhere in the middle. Let's compare their predictive power.
+
+### Comparing predictive power
+
+```{r model_comparing_by_pred}
+
+#function to calculate metrics
+calc_metrics <- function(model.name,newdata,response.var) {
+  argg <- as.list(environment())
+  pred <- predict(model.name,newdata = newdata,estimator = 'BMA')
+  act_pred <- data.frame(cbind(act=response.var, pred=pred$fit))
+    
+  MSE <- mean((act_pred$act - act_pred$pred)^2,na.rm=T)
+  efR <- 1 - sum( (act_pred$act - act_pred$pred)^2 ,na.rm=T)/
+    sum( (act_pred$act-mean(act_pred$act,na.rm=T))^2 ,na.rm=T)
+  
+  df <- data.frame(deparse(substitute(model.name)),round(MSE,4),round(efR,4))
+  names(df) <- c('Model','MSE','EfronsR^2')
+  return(df)
+}
+
+#metrics for all the models
+res_table <- calc_metrics(model.BIC,movies_test,movies_test$audience_score)
+res_table <- rbind(res_table,calc_metrics(model.AIC,movies_test,movies_test$audience_score))
+res_table <- rbind(res_table,calc_metrics(model.EB,movies_test,movies_test$audience_score))
+res_table
+```
+
+According to the prediction accuracy the best model is `model.EB` (smallest MSE and biggest Efron's R^2^). I will use this model for further exploration.
+
+### The best model
+
+#### Summary of the BMA
+
+```{r best_model_summary}
+
+summary(model.EB)
+```
+
+From this output we can see that most significant variables are: `critics_score` with the inclusion probability 1, `feature_film` with the inclusion probability close to 1, `drama` with the inclusion probability 0.979, `thtr_rel_year` with the inclusion probability 0.979, `imdb_num_votes` with inclusion probability close to 1.
+
+Moderately significant variables are: `best_pic_nom` with the inclusion probability 0.268, `best_ac_winyes` with the inclusion probability 0.359 and best_dir_win with the inclusion probability 0.188
+
+Other variables have the inclusion probability less than 0.15.
+
+#### Credible intervals of the $\beta$s
+
+```{r best_model_cred_inreval_betas}
+
+model.EB.coefs = coef(model.EB)
+confint(model.EB.coefs)
+```
+
+There is a very interesting results among this group of variables - `best_pic_nom`, `best_pic_win`, `best_ac_win`, `best_dir_win` and `top200_box` - only the first one `best_pic_nom` - has positive correlation with the response variables, others have mixed or negative correlation. This could be because of the collinearity between them. We can see this data in the visual form below
+
+#### Plots of the $\beta$s
+
+Posterior Uncertainty in Coefficients
+
+```{r best_model_plot_betas, fig.height=3}
+
+par(mfrow = c(1, 2), col.lab = 'darkgrey', col.axis = 'darkgrey', col = 'darkgrey')
+plot(model.EB.coefs, ask = F, subset = c(2:15))
+
+```
+
+#### Model space
+
+```{r best_model_model_space}
+
+image(model.EB, rotate = F,vlas = 2,plas = 0)
+```
+
+We can see that the posterior odds have considerable differences between the first three models and they differ only in one variable from each other.
+
+### Best single model
+
+#### Highest Probability Model
+
+If our objective is to learn what is the most likely model to have generated the data using a 0-1 loss function, then the highest probability model (HPM) is optimal.
+
+```{r best_single_HPM_vars}
+
+model.EB.HPM <- predict(model.EB, estimator = 'HPM')
+model.EB.HPM$best.vars
+```
+
+We can see that HPM has 5 variables not including intercept.
+
+Let's see its posterior means of coefficients:
+
+```{r best_single_HPM_coef}
+
+coef(model.EB, estimator='HPM')
+```
+
+If we compare them to the BMA (`feature_filmYes = -16.7547, dramaYes = 4.2548, thtr_rel_year = -0.1956, imdb_num_votes = 2.9830`) we can see that they are almost identical which suggests the stability of the model.
+
+We can also obtain the posterior probability of this model:
+
+```{r best_model_HPM_prob}
+
+model.EB$postprobs[model.EB.HPM$best]
+```
+
+The posterior probability is quite high for a single model.
+
+#### Median Probability Model
+
+This model includes all predictors whose marginal posterior inclusion probabilities are greater than 0.5.
+
+```{r single_model_MPM_vars}
+
+model.EB.MPM = predict(model.EB, estimator = 'MPM')
+model.EB.MPM$best.vars
+```
+
+We can see that variables are the same as for the HPM.
+
+Let's look at the posterior means of coefficients:
+
+```{r single_model_MPM_coef}
+
+coef(model.EB, estimator='MPM')
+```
+
+The coefficients are also the same as in the HPM.
+
+#### Best Predictive Model
+
+This is a model whose predictions are closest to those given by BMA based on squared error loss for predictions.
+
+```{r best_single_BMP_vars}
+
+model.EB.BPM <- predict(model.EB, estimator = 'BPM')
+model.EB.BPM$best.vars
+```
+
+We can see here additional variable `oscar_season` compare to HPM and MPM
+
+Because the `coef()` function is not yet implemented for this model we have to extract coefficients manually.
+
+```{r best_single_BPM_coef}
+
+# Extract a binary vector of zeros and ones for the variables included 
+# in the BPM
+BPM <- as.vector(which.matrix(model.EB$which[model.EB.BPM$best],
+                             model.EB$n.vars))
+
+# Re-run regression and specify `bestmodel` and `n.models`
+model.EB.BPM_re <- bas.lm(audience_score ~ ., data = movies_short,
+                      prior = 'EB-local',
+                      modelprior = uniform(),
+                      bestmodel = BPM, n.models = 1)
+
+coef(model.EB.BPM_re)
+```
+
+We can see that coefficients are very similar to HPM and MPM as well.
+
+From comparing all 4 models we can see that main variables are uncorrelated and the model is very stable in coefficients. In further analysis I'm going to use the BMA model.
+
+### Diagnostics
+
+#### OLS assumptions
+
+1.  $\epsilon$ is a random variable that does not depend on X - 'perfect model'
+
+    Residual plot shows a pattern?
+
+2.  $E(\epsilon)=0$ (always true for a model with an intercept)
+
+3.  All $\epsilon_i$ are independent of each other (they are uncorrelated for the population, but not for the sample)
+
+4.  $\epsilon \sim N(0,\theta_\epsilon)$ Residuals and $y_i$ are normally distributed
+
+    They are not perfectly normal, but it will do for now.
+
+5.  all $\epsilon_i$ have the same PDF - homoscedasticity
+
+    There is some heteroscedasticity, but it will do for now.
+
+#### Outliers
+
+Let's assume prior probability of no outliers in the sample 0.95, then:
+
+```{r outliers_k}
+
+#outlier criterion k*SE
+k = qnorm(0.5 + 0.5*(0.95^(1/nrow(movies_short))))
+
+#predicted values
+pred <- predict(model.EB,estimator = 'BMA', se=TRUE)
+
+MSE <- mean((movies_short$audience_score - pred$fit)^2,na.rm=T)
+
+#standardized residuals
+resid_norm <- (movies_short$audience_score - pred$fit)/sqrt(MSE)
+
+#if there any residuals more than K standard errors away 
+resid_norm[abs(resid_norm) > k]
+
+```
+
+According to `Bayes.outlier()` function, there are no outliers with posterior probability more than 0.5 as well.
+
+```{r best_model_outliers }
+
+model.lm = lm(audience_score~., data=movies_short)
+
+outliers <- Bayes.outlier(model.lm, k=k)
+
+outliers_df <- data.frame(probability = outliers$prob.outlier,
+                          case = 1:length(outliers$prob.outlier))
+outliers_df %>%
+  filter(probability > 0.50)
+
+head(outliers_df)
+```
+
+#### Diagnostic plots
+
+##### Residuals vs fitted
+
+```{r best_model_diagnostic_plot_1}
+
+plot(model.EB,caption = '', sub.caption = '', 
+     col.in = 'blue', col.ex = 'darkgrey', lwd = 3, ask = F, which=1 )
+```
+
+plot of residuals and fitted values under Bayesian Model Averaging. We see potential outliers - cases 402, 572 and 371 and non-constant variance. This outliers result differs from what I calculated above in the 'Outliers' section. This needs further investigation. Also there is a slightly non-linear trend, but it should not be a major problem.
+
+##### Cumulative probability
+
+```{r best_model_diagnostic_plot_2}
+
+plot(model.EB,caption = '', sub.caption = '', 
+     col.in = 'blue', col.ex = 'darkgrey', lwd = 3, ask = F, which=2 )
+```
+
+This plot indicates that the cumulative probability is leveling off as each additional model adds only a small increment to the cumulative probability; large jumps in the middle correspond to discovering a new high probability model.
+
+##### Dimensions
+
+```{r best_model_diagnostic_plot_3}
+
+plot(model.EB,caption = '', sub.caption = '', 
+     col.in = 'blue', col.ex = 'darkgrey', lwd = 3, ask = F, which=3 )
+```
+
+The third plot shows the dimension of each model (the number of regression coefficients including the intercept) versus the log of the marginal likelihood of the model.
+
+##### PIP
+
+```{r best_model_diagnostic_plot_4}
+
+plot(model.EB,caption = '', sub.caption = '', 
+     col.in = 'blue', col.ex = 'darkgrey', lwd = 3, ask = F, which=4 )
+```
+
+The last plot shows the marginal posterior inclusion probabilities (pip) for each of the covariates, with marginal pips greater than 0.5 shown in blue. The variables with pip \> 0.5 correspond to what is known as the median probability model. Marginal inclusion probabilities may be small if there are predictors that are highly correlated, similar to how p-values may be large in the presence of multicollinearity - which is probably the case for `best_pic_nom`, `best_pic_win`, `best_ac_win`, `best_dir_win` group.
+
+##### Residual distribution
+
+```{r best_model_residuals_distr}
+
+residuals <- movies_short$audience_score - pred$fit
+
+hist(residuals)
+```
+
+Distribution is fairly symmetrical and normal looking
+
+##### QQ plot
+
+```{r best_model_qq_plot}
+
+qqnorm(residuals, pch = 1, frame = FALSE)
+qqline(residuals, col = 'steelblue', lwd = 2)
+```
+
+QQ plot also shows that residuals distribution is close to normal
+
+##### Residuals autocorrelation
+
+Checking for 'omitted variables' which can leave traces in the residuals in the form of auto-correlation ( or inadvertent time series ).
+
+Lag plot
+
+```{r adv_model_autocor_lag plot}
+
+lag.plot(residuals, lags = 1, do.lines = F, labels = F)
+```
+
+Looks good - no visible correlation
+
+## Part 5: Prediction
+
+Instead of one of the movies from 2016 I will use the test part of the data. I used movies to train models. Now I will use the remaining part to predict and compare BMA with HPM, MPM and BPM.
+
+### BMA model
+
+Let's look at a few random points from test data with their CI
+
+```{r predict_CI_BMA}
+
+predict.BMA <- predict(model.EB, newdata=movies_test, estimator = 'BMA', se.fit = TRUE)
+
+out <- as.data.frame(confint(predict.BMA)[, 1:2])
+
+# Extract the upper and lower bounds of the credible intervals
+names <- c('Actual', 'Predicted', colnames(out))
+out <- cbind(movies_test$audience_score, predict.BMA$fit, out)
+colnames(out) <- names
+
+picked <- sample(seq_len(nrow(out)),10)
+round(out[picked,], 2)
+
+```
+
+We can see that the uncertainty in the prediction values is quite high and precision is not great as well.
+
+### Other models
+
+Lets compare all models
+
+```{r prediction_compare_models}
+
+predict.HPM <- predict(model.EB, newdata=movies_test, estimator = 'HPM')
+predict.MPM <- predict(model.EB, newdata=movies_test, estimator = 'MPM')
+predict.BPM <- predict(model.EB, newdata=movies_test, estimator = 'BPM')
+
+ggpairs(data.frame(Y = as.vector(movies_test$audience_score),
+                   HPM = as.vector(predict.HPM$fit),  
+                   MPM = as.vector(predict.MPM$fit),  
+                   BPM = as.vector(predict.BPM$fit),  
+                   BMA = as.vector(predict.BMA$fit))) 
+```
+
+We can see that all models are identically in prediction power.
+
+## Part 6: Conclusion
+
+### Model explanation
+
+Summary table
+
+```{r conclusion_summary_table}
+
+out <- confint(model.EB.coefs)[, 1:2]  
+
+# Extract the upper and lower bounds of the credible intervals
+names <- c('posterior mean', 'posterior std', colnames(out))
+out <- cbind(model.EB.coefs$postmean, model.EB.coefs$postsd, out)
+colnames(out) <- names
+
+round(out, 2)
+```
+
+For explanation of the movie popularity I will use variables with pip \> 0.5: `critics_score`, `feature_film`, `drama`, `thtr_rel_year`, `imdb_num_votes`
+
+-   for each increase of the critics_score by 1 unit we are 95% confident to get an increase of the `audience_score` from 0.37 to 0.46 units
+
+-   for the movies with `title_type = 'Feature film'` we are 95% confident to get a decrease of the `audience_score` from -21.80 to -11.73 units
+
+-   for the movies with `genre = 'Drama'` we we are 95% confident to get an increase of the `audience_score` from 1.69 to 7.00 units
+
+-   for each additional year we are 95% confident to get a decrease in the `audience_score` from -0.32 to -0.08 units
+
+-   `imdb_num_votes` is a log-transformed variable, so we can interpret the result in terms of percentages. For a 1% increase in the `imdb_num_votes` we are 95% confident to get an increase of the `audience_score` from 0.0216 to 0.0381 units.
+
+### Quality of the model.
+
+Firstly - there is not enough information in the dataset - many predictor levels have too small numbers of observations. The best possible solution is to increase a sample size. Also methods like <https://www.researchgate.net/publication/257364616_SMOTE_for_Regression> can be useful if collecting more data is not an option.
+
+Another possible issue is the non-independence of observations - if you violate the assumption of independence, **you run the risk that all of your results will be wrong**, so more research is needed.
+
+There is also a problem with heteroscedasticity and potential outliers, which requires further investigation.
